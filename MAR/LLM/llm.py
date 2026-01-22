@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Union, Optional,Dict
 
 class LLM(ABC):
-    DEFAULT_MAX_TOKENS = 81920
+    DEFAULT_MAX_TOKENS = 4096
     DEFAULT_TEMPERATURE = 1
     DEFUALT_NUM_COMPLETIONS = 1
 

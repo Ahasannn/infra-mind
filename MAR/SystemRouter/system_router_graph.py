@@ -11,6 +11,7 @@ from MAR.Utils.telemetry import GraphTrace, NodeTiming, utc_now_iso, LLMUsageTra
 from MAR.Utils.utils import find_mode
 from MAR.LLM.llm_registry import LLMRegistry
 from MAR.SystemRouter.system_router_agent import SystemRouterAgent
+from MAR.SystemRouter.metrics_watcher import model_metrics
 
 
 class SystemRouterGraph(Graph):
@@ -33,12 +34,12 @@ class SystemRouterGraph(Graph):
         inputs: Dict[str, str],
         router: Any,
         query_embedding: torch.Tensor,
-        latency_vector: torch.Tensor,
         budget_total: float,
         num_rounds: int = 1,
         deterministic: bool = False,
         max_tries: int = 3,
         router_lock: Optional[threading.Lock] = None,
+        system_state_vector: Optional[torch.Tensor] = None,
         trace: Optional[GraphTrace] = None,
     ) -> Dict[str, Any]:
         if trace is not None:
@@ -96,7 +97,7 @@ class SystemRouterGraph(Graph):
                 "total_tokens": total_tokens,
             }
 
-        def select_actions(node_ids: List[str], round_idx: int) -> None:
+        def select_actions(node_ids: List[str], round_idx: int, wave_idx: int) -> None:
             nonlocal step_counter
             for node_id in node_ids:
                 node = self.nodes[node_id]
@@ -106,16 +107,22 @@ class SystemRouterGraph(Graph):
                         role_embedding = router.encode_role(role_name)
                         elapsed = time.perf_counter() - workflow_t0
                         budget_remaining = max(budget_total - elapsed, 0.0)
+                        state_vector = system_state_vector
+                        if state_vector is None:
+                            state_vector = router.get_system_state_vector(query_embedding.dtype)
                         exec_state = router.assemble_executor_state(
-                            query_embedding, role_embedding, budget_remaining, latency_vector
+                            query_embedding, role_embedding, budget_remaining, state_vector
                         )
                         exec_action = router.get_executor_action(exec_state, deterministic=deterministic)
                 else:
                     role_embedding = router.encode_role(role_name)
                     elapsed = time.perf_counter() - workflow_t0
                     budget_remaining = max(budget_total - elapsed, 0.0)
+                    state_vector = system_state_vector
+                    if state_vector is None:
+                        state_vector = router.get_system_state_vector(query_embedding.dtype)
                     exec_state = router.assemble_executor_state(
-                        query_embedding, role_embedding, budget_remaining, latency_vector
+                        query_embedding, role_embedding, budget_remaining, state_vector
                     )
                     exec_action = router.get_executor_action(exec_state, deterministic=deterministic)
                 model_idx = int(exec_action["model_index"].item())
@@ -136,6 +143,7 @@ class SystemRouterGraph(Graph):
                     "role": role_name,
                     "step_index": step_counter,
                     "round_index": round_idx,
+                    "wave_index": wave_idx,
                     "node_id": node_id,
                     "model": model_name,
                     "strategy": strategy_name,
@@ -151,6 +159,15 @@ class SystemRouterGraph(Graph):
             usage_key = f"{self.id}:{round_idx}:{node_id}"
             context_token = usage_tracker.set_context(usage_key)
             usage_tracker.clear(usage_key)
+            model_name = transition.get("model", "")
+            snap = model_metrics.get(model_name, {})
+            with transitions_lock:
+                transition["llm_running"] = snap.get("num_requests_running", 0)
+                transition["llm_waiting"] = snap.get("num_requests_waiting", 0)
+                transition["llm_kv_cache_usage"] = snap.get("kv_cache_usage_perc", 0.0)
+                transition["llm_ttft_avg"] = snap.get("ttft_avg", 0.0)
+                transition["llm_itl_avg"] = snap.get("itl_avg", 0.0)
+                transition["llm_e2e_avg"] = snap.get("e2e_avg", 0.0)
             tries = 0
             success = False
             error_msg = ""
@@ -158,12 +175,11 @@ class SystemRouterGraph(Graph):
                 while tries < max_tries:
                     tries += 1
                     try:
-                        node.execute(inputs)
+                        node.execute(inputs, max_tokens=getattr(self, "max_tokens", None))
                         success = True
                         break
                     except Exception as e:
                         error_msg = str(e)
-                        print(f"Error during execution of node {node_id}: {e}")
             finally:
                 usage = usage_tracker.consume(usage_key)
                 usage_tracker.reset_context(context_token)
@@ -173,12 +189,20 @@ class SystemRouterGraph(Graph):
             response_text = _final_output_text(node)
             prompt_base = getattr(node, "prompt_base", "")
             token_counts = _record_token_usage(usage)
+            observed_ttft = float(getattr(node, "last_ttft", 0.0))
+            observed_tpot = float(getattr(node, "last_tpot", 0.0))
 
             with transitions_lock:
                 transition["latency_seconds"] = duration_sec
                 transition["response"] = response_text
                 transition["prompt_base"] = prompt_base
                 transition["token_counts"] = token_counts
+                transition["observed_ttft"] = observed_ttft
+                transition["observed_tpot"] = observed_tpot
+                transition["success"] = success
+                transition["error"] = error_msg
+                transition["success"] = bool(success)
+                transition["error"] = error_msg
 
             if trace is not None:
                 trace.record_node_event(
@@ -202,6 +226,9 @@ class SystemRouterGraph(Graph):
                     )
                 )
 
+            if not success:
+                raise RuntimeError(f"Agent {node_id} failed after {tries} tries: {error_msg}")
+
         try:
             for round_idx in range(num_rounds):
                 log_probs += self.construct_spatial_connection()
@@ -211,12 +238,13 @@ class SystemRouterGraph(Graph):
                     node_id: len(node.spatial_predecessors) for node_id, node in self.nodes.items()
                 }
                 zero_in_degree_queue = [node_id for node_id, deg in in_degree.items() if deg == 0]
+                wave_idx = 0
 
                 while zero_in_degree_queue:
                     current_wave_ids = zero_in_degree_queue
                     zero_in_degree_queue = []
 
-                    select_actions(current_wave_ids, round_idx)
+                    select_actions(current_wave_ids, round_idx, wave_idx)
 
                     max_workers = len(current_wave_ids)
                     if max_workers <= 1:
@@ -237,6 +265,7 @@ class SystemRouterGraph(Graph):
                             in_degree[successor.id] -= 1
                             if in_degree[successor.id] == 0:
                                 zero_in_degree_queue.append(successor.id)
+                    wave_idx += 1
 
                 self.update_memory()
 
@@ -257,7 +286,7 @@ class SystemRouterGraph(Graph):
             decision_success = False
             decision_error = ""
             try:
-                decision_node.execute(inputs)
+                decision_node.execute(inputs, max_tokens=getattr(self, "max_tokens", None))
                 decision_success = True
             except Exception as e:
                 decision_error = str(e)
@@ -292,7 +321,16 @@ class SystemRouterGraph(Graph):
                     )
                 )
 
-            workflow_latency = time.perf_counter() - workflow_t0
+            wave_max_latency: Dict[Tuple[int, int], float] = {}
+            for transition in transitions.values():
+                latency = float(transition.get("latency_seconds", 0.0))
+                round_index = int(transition.get("round_index", 0) or 0)
+                wave_index = int(transition.get("wave_index", 0) or 0)
+                key = (round_index, wave_index)
+                prev = wave_max_latency.get(key, 0.0)
+                if latency > prev:
+                    wave_max_latency[key] = latency
+            workflow_latency = float(sum(wave_max_latency.values()))
             ordered_transitions = sorted(transitions.values(), key=lambda item: item["step_index"])
             return {
                 "final_response": decision_text,

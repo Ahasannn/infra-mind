@@ -140,6 +140,18 @@ def _resolve_base_url(model_name: str) -> Optional[str]:
         return per_model[model_name]
     return os.environ.get("URL")
 
+def _default_request_timeout() -> Optional[float]:
+    raw = os.environ.get("LLM_REQUEST_TIMEOUT", "").strip()
+    if not raw:
+        return 120.0
+    try:
+        timeout = float(raw)
+    except ValueError:
+        return 120.0
+    if timeout <= 0:
+        return None
+    return timeout
+
 
 @LLMRegistry.register('ALLChat')
 class ALLChat(LLM):
@@ -166,6 +178,7 @@ class ALLChat(LLM):
         client = OpenAI(
             base_url=_resolve_base_url(self.model_name),
             api_key=_resolve_api_key(),
+            timeout=_default_request_timeout(),
         )
         chat_completion = client.chat.completions.create(
         messages = messages,
@@ -197,6 +210,7 @@ class ALLChat(LLM):
         client = AsyncOpenAI(
             base_url=_resolve_base_url(self.model_name),
             api_key=_resolve_api_key(),
+            timeout=_default_request_timeout(),
         )
         chat_completion = await client.chat.completions.create(
         messages = messages,
@@ -231,8 +245,11 @@ class DSChat(LLM):
 
         if isinstance(messages, str):
             messages = [{'role':"user", 'content':messages}]
-        client = OpenAI(base_url = os.environ.get("DS_URL"),
-                        api_key = os.environ.get("DS_KEY"))
+        client = OpenAI(
+            base_url=os.environ.get("DS_URL"),
+            api_key=os.environ.get("DS_KEY"),
+            timeout=_default_request_timeout(),
+        )
         chat_completion = client.chat.completions.create(
         messages = messages,
         model = self.model_name,
@@ -260,8 +277,11 @@ class DSChat(LLM):
         if isinstance(messages, str):
             messages = [{'role':"user", 'content':messages}]
         
-        client = AsyncOpenAI(base_url = os.environ.get("DS_URL"),
-                             api_key = os.environ.get("DS_KEY"),)
+        client = AsyncOpenAI(
+            base_url=os.environ.get("DS_URL"),
+            api_key=os.environ.get("DS_KEY"),
+            timeout=_default_request_timeout(),
+        )
         chat_completion = await client.chat.completions.create(
         messages = messages,
         model = self.model_name,
@@ -455,8 +475,11 @@ class OpenRouterChat(LLM):
 
         if isinstance(messages, str):
             messages = [{'role':"user", 'content':messages}]
-        client = OpenAI(base_url = os.environ.get("OPENROUTER_BASE_URL"),
-                        api_key = os.environ.get("OPENROUTER_API_KEY"),)
+        client = OpenAI(
+            base_url=os.environ.get("OPENROUTER_BASE_URL"),
+            api_key=os.environ.get("OPENROUTER_API_KEY"),
+            timeout=_default_request_timeout(),
+        )
         chat_completion = client.chat.completions.create(
         messages = messages,
         model = self.model_name,

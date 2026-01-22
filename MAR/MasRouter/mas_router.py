@@ -109,8 +109,7 @@ class MasRouter(nn.Module):
                 dataset: Optional[str] = None,
                 split: Optional[str] = None,
                 batch_id: Optional[int] = None,
-                run_id: Optional[str] = None,
-                variant: str = "baseline"):
+                run_id: Optional[str] = None):
         """
         queries:List[Dict[str, str]]: List of queries
         tasks:List[Dict[str, str]]: List of tasks
@@ -124,7 +123,11 @@ class MasRouter(nn.Module):
         task_role_database, task_role_emb = self.encoder_roles() # task_role_database: Dict[str, List[Dict[str, str]]], task_role_emb: Dict[str, torch.Tensor]
 
         # Text embedding
-        queries_embedding = self.text_encoder(queries) # N_q*d tensor, N_q is the number of queries, d is the dimension of each query
+        use_offline_mbpp = (dataset or "").strip().lower() == "mbpp" and item_ids is not None
+        if use_offline_mbpp:
+            queries_embedding = self.text_encoder(queries, query_ids=item_ids)
+        else:
+            queries_embedding = self.text_encoder(queries) # N_q*d tensor, N_q is the number of queries, d is the dimension of each query
         tasks_embedding = self.text_encoder(tasks_list) # N_t*d tensor, N_t is the number of tasks, d is the dimension of each task
         llms_embedding = self.text_encoder(llms_list) # N_l*d tensor, N_l is the number of llms, d is the dimension of each llm
         collabs_embedding = self.text_encoder(collabs_list) # N_r*d tensor, N_r is the number of collabs, d is the dimension of each collab
@@ -156,9 +159,8 @@ class MasRouter(nn.Module):
         final_result = []
         costs = []
         telemetry_writer = CsvTelemetryWriter(telemetry_path) if telemetry_path else None
-        variant = (variant or "baseline").strip().lower()
-        runtime_llm_assignment = variant == "modified"
-        latency_budget = "medium" if variant == "modified" else None
+        runtime_llm_assignment = False
+        latency_budget = None
         run_id = run_id or uuid.uuid4().hex[:8]
         for i, (query, task, llms, collab, roles) in enumerate(
             zip(queries, selected_tasks, selected_llms, selected_collabs, selected_roles)

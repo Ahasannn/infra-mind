@@ -115,9 +115,11 @@ class SystemRouterEnv:
         prompt_file: Optional[str] = None,
         metrics_interval: float = 1.0,
         metrics_url_map: Optional[Dict[str, str]] = None,
+        request_timeout: float = 120.0,
     ) -> None:
         self.router = router
         self.max_tokens = max_tokens
+        self.request_timeout = request_timeout
         self.router_lock = threading.Lock()
         self.prompt_file = prompt_file or str(
             Path(__file__).resolve().parents[2] / "MAR" / "Roles" / "FinalNode" / "mbpp.json"
@@ -133,6 +135,7 @@ class SystemRouterEnv:
         tests: Optional[List[str]] = None,
         deterministic: bool = False,
         latency_seed: Optional[str] = None,
+        query_id: Optional[object] = None,
     ) -> Dict[str, Union[str, float, torch.Tensor, Dict[str, float], List[dict]]]:
         """
         Run one hierarchical episode: planner picks topology/roles, executor runs each role.
@@ -141,14 +144,19 @@ class SystemRouterEnv:
             raise ValueError("Tests are required for quality scoring; no fallback is used.")
 
         with self.router_lock:
-            plan = self.router.plan_graph(query, deterministic=deterministic)
+            plan = self.router.plan_graph(query, deterministic=deterministic, query_id=query_id)
 
         budget_total = self.router.estimate_initial_budget(query)
-        latency_dict = self.router.get_system_latency(seed=latency_seed or query)
-        latency_vector = self.router.flatten_latency(latency_dict, dtype=plan["query_embedding"].dtype)
 
         role_set = plan["role_set"]
         graph_kwargs = get_kwargs(plan["topology_name"], len(role_set))
+        node_kwargs = graph_kwargs.get("node_kwargs")
+        if not node_kwargs or len(node_kwargs) != len(role_set):
+            node_kwargs = [{} for _ in role_set]
+        for kwargs in node_kwargs:
+            kwargs.setdefault("max_tokens", self.max_tokens)
+            kwargs.setdefault("request_timeout", self.request_timeout)
+        graph_kwargs["node_kwargs"] = node_kwargs
         num_rounds = graph_kwargs.pop("num_rounds", 1)
         llm_names = [self.router.models[0] for _ in role_set]
         graph = SystemRouterGraph(
@@ -161,11 +169,11 @@ class SystemRouterEnv:
             runtime_llm_assignment=False,
             **graph_kwargs,
         )
+        graph.max_tokens = self.max_tokens
         graph_result = graph.run_with_policy(
             inputs={"query": query},
             router=self.router,
             query_embedding=plan["query_embedding"],
-            latency_vector=latency_vector,
             budget_total=budget_total,
             num_rounds=num_rounds,
             deterministic=deterministic,

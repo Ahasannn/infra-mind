@@ -75,8 +75,6 @@ def parse_args():
     parser.add_argument('--start_epoch', type=int, default=0)
     parser.add_argument('--cost_rate', type=float, default=400.0)
     parser.add_argument('--max_agent', type=int, default=6)
-    parser.add_argument('--variant', type=str, default='baseline', choices=['baseline', 'modified'],
-                        help="Run variant: baseline (static LLMs) or modified (runtime LLMs + latency budget).")
     parser.add_argument("--arrival-rate", type=float, default=0.0, help="Arrival rate (req/sec) for test shooting.")
     parser.add_argument("--arrival-pattern", type=str, default="poisson", help="Arrival pattern for test shooting.")
     parser.add_argument("--concurrency", type=int, default=1, help="Max concurrent in-flight requests in test shooting.")
@@ -131,6 +129,7 @@ if __name__ == '__main__':
             start_ts = time.time()
             queries = [item['task'] for item in current_batch]
             tests = [item['test_list'] for item in current_batch]
+            item_ids = [item.get("task_id", "") for item in current_batch]
             task_labels = [2 for _ in current_batch]
             tasks_y = torch.tensor(task_labels).to(device)
             optimizer.zero_grad()
@@ -141,7 +140,8 @@ if __name__ == '__main__':
                 reasonings,
                 task_labels,
                 prompt_file=args.prompt_file,
-                variant=args.variant,
+                item_ids=item_ids,
+                dataset=args.domain,
             )
             
             task_loss = F.cross_entropy(tasks_probs, tasks_y)
@@ -211,7 +211,7 @@ if __name__ == '__main__':
             with torch.no_grad():
                 results, costs, log_probs, tasks_probs, vae_loss, agents_num = router.forward(
                     [query],
-                    [tests],
+                    tasks,
                     llms,
                     reasonings,
                     task_labels,
@@ -222,7 +222,6 @@ if __name__ == '__main__':
                     split="test",
                     batch_id=0,
                     run_id=current_time,
-                    variant=args.variant,
                 )
             return {
                 "query": query,
@@ -305,7 +304,6 @@ if __name__ == '__main__':
                 split="test",
                 batch_id=i_batch,
                 run_id=current_time,
-                variant=args.variant,
             )
             utilities = []
             for item_id, query, result, test, log_prob, cost in zip(item_ids, queries, results, tests, log_probs, costs):
