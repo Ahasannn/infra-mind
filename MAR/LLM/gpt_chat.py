@@ -1,5 +1,7 @@
 import aiohttp
 import asyncio
+import atexit
+import threading
 from typing import List, Union, Optional
 from tenacity import retry, wait_random_exponential, stop_after_attempt, retry_if_not_exception_type
 from typing import Dict, Any
@@ -29,6 +31,33 @@ from MAR.LLM.llm_registry import LLMRegistry
 load_dotenv()
 MINE_BASE_URL = os.getenv('BASE_URL')
 MINE_API_KEYS = os.getenv('API_KEY')
+
+_SYNC_CLIENT_LOCK = threading.Lock()
+_SYNC_CLIENTS: Dict[tuple[str, str], OpenAI] = {}
+
+
+def _get_shared_sync_client(*, base_url: Optional[str], api_key: str) -> OpenAI:
+    # Keep one OpenAI sync client per (base_url, api_key) to reuse HTTP connection pooling.
+    key = ((base_url or "").strip(), (api_key or "").strip())
+    with _SYNC_CLIENT_LOCK:
+        client = _SYNC_CLIENTS.get(key)
+        if client is None:
+            client = OpenAI(base_url=base_url, api_key=api_key)
+            _SYNC_CLIENTS[key] = client
+    return client
+
+
+@atexit.register
+def _close_shared_sync_clients() -> None:
+    # Best-effort cleanup; prevents dangling sockets/FDS on long runs.
+    with _SYNC_CLIENT_LOCK:
+        clients = list(_SYNC_CLIENTS.values())
+        _SYNC_CLIENTS.clear()
+    for client in clients:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -219,15 +248,19 @@ class ALLChat(LLM):
         if isinstance(messages, str):
             messages = [{'role':"user", 'content':messages}]
         timeout = _normalize_request_timeout(request_timeout)
+        base_client = None
         try:
-            client = OpenAI(
+            base_client = _get_shared_sync_client(
                 base_url=_resolve_base_url(self.model_name),
                 api_key=_resolve_api_key(),
-                timeout=timeout,
             )
+            client = base_client.with_options(timeout=timeout)
             chat_completion = client.chat.completions.create(
                 messages=messages,
                 model=self.model_name,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                n=num_comps,
             )
         except Exception as exc:
             if _is_timeout_error(exc):
@@ -258,6 +291,7 @@ class ALLChat(LLM):
             messages = [{'role':"user", 'content':messages}]
         
         timeout = _normalize_request_timeout(request_timeout)
+        client = None
         try:
             client = AsyncOpenAI(
                 base_url=_resolve_base_url(self.model_name),
@@ -274,6 +308,12 @@ class ALLChat(LLM):
             if _is_timeout_error(exc):
                 raise TimeoutError("LLM request timed out") from exc
             raise
+        finally:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
         response = chat_completion.choices[0].message.content
 
         return response
@@ -307,15 +347,19 @@ class DSChat(LLM):
         if isinstance(messages, str):
             messages = [{'role':"user", 'content':messages}]
         timeout = _normalize_request_timeout(request_timeout)
+        base_client = None
         try:
-            client = OpenAI(
+            base_client = _get_shared_sync_client(
                 base_url=os.environ.get("DS_URL"),
-                api_key=os.environ.get("DS_KEY"),
-                timeout=timeout,
+                api_key=os.environ.get("DS_KEY") or "",
             )
+            client = base_client.with_options(timeout=timeout)
             chat_completion = client.chat.completions.create(
                 messages=messages,
                 model=self.model_name,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                n=num_comps,
             )
         except Exception as exc:
             if _is_timeout_error(exc):
@@ -346,6 +390,7 @@ class DSChat(LLM):
             messages = [{'role':"user", 'content':messages}]
         
         timeout = _normalize_request_timeout(request_timeout)
+        client = None
         try:
             client = AsyncOpenAI(
                 base_url=os.environ.get("DS_URL"),
@@ -362,6 +407,12 @@ class DSChat(LLM):
             if _is_timeout_error(exc):
                 raise TimeoutError("LLM request timed out") from exc
             raise
+        finally:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
         response = chat_completion.choices[0].message.content
 
         return response

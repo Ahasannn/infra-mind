@@ -13,6 +13,7 @@ import re
 import torch
 from loguru import logger
 import torch.nn.functional as F
+import glob
 
 from MAR.MasRouter.mas_router import MasRouter
 from MAR.LLM.llm_profile_test import llm_profile
@@ -45,6 +46,15 @@ def dataloader(data_list, batch_size, i_batch):
 def load_config(config_path):
     with open(config_path, 'r',encoding='utf-8') as file:
         return yaml.safe_load(file)
+
+def reset_vllm_logs():
+    """Truncate vLLM model logs so each run starts fresh instead of appending."""
+    for path in glob.glob("logs/vllm/*.log"):
+        try:
+            open(path, "w").close()
+        except OSError:
+            # Best-effort; ignore if file is locked or missing.
+            pass
     
 def parse_args():
     parser = argparse.ArgumentParser(description="AgentPrune Experiments on mbpp")
@@ -110,6 +120,7 @@ BASELINE_TRAIN_FIELDS = (
 
 
 if __name__ == '__main__':
+    reset_vllm_logs()
     args = parse_args()
     fix_random_seed(1234)
     train_dataset = MbppDataset('train')
@@ -146,6 +157,8 @@ if __name__ == '__main__':
     logger.info("Start training...")
     
     episode_counter = 0
+    checkpoint_dir = os.path.join("checkpoints", "mas_router")
+    os.makedirs(checkpoint_dir, exist_ok=True)
     for epoch in range(args.epochs):
         logger.info(f"Epoch {epoch}",80*'-')
         total_solved, total_executed = (0, 0)
@@ -274,8 +287,13 @@ if __name__ == '__main__':
             logger.info(f"Batch time {time.time() - start_ts:.3f}")
             logger.info(f"Accuracy: {accuracy}")
             logger.info(f"utilities:{utilities}")
-        checkpoint_dir = os.path.join("checkpoints", "mas_router")
-        os.makedirs(checkpoint_dir, exist_ok=True)
+            if (i_batch + 1) % 5 == 0:
+                # Periodic checkpoints so we can resume long runs even if a later batch hangs/crashes.
+                ckpt_path = os.path.join(checkpoint_dir, "mbpp_router_latest_new.pth")
+                tmp_path = ckpt_path + ".tmp"
+                torch.save(router.state_dict(), tmp_path)
+                os.replace(tmp_path, ckpt_path)
+                logger.info(f"Saved checkpoint: {ckpt_path}")
         torch.save(
             router.state_dict(),
             os.path.join(checkpoint_dir, f"mbpp_router_epoch{epoch}_new.pth"),
