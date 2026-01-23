@@ -100,6 +100,21 @@ class MasRouter(nn.Module):
         self.num_determiner = NumDeterminer(input_dim = in_dim, hidden_dim=hidden_dim,max_agent=max_agent, device=self.device)
         self.role_allocation = RoleAllocation(input_dim = in_dim, context_input_dim = 2* hidden_dim, hidden_dim=hidden_dim,device=self.device,temp=temp)
         self.llm_router = LLMRouter(device=self.device,max_agent=max_agent,temp=1.0)
+        # Cache static embeddings and role databases; these are pure inputs and don't need recomputing
+        # on every batch/forward.
+        self._cached_task_role_database = None
+        self._cached_task_role_emb = None
+        self._cached_tasks_key = None
+        self._cached_tasks_embedding = None
+        self._cached_llms_key = None
+        self._cached_llms_embedding = None
+        self._cached_collabs_key = None
+        self._cached_collabs_embedding = None
+
+    def _get_cached_roles(self):
+        if self._cached_task_role_database is None or self._cached_task_role_emb is None:
+            self._cached_task_role_database, self._cached_task_role_emb = self.encoder_roles()
+        return self._cached_task_role_database, self._cached_task_role_emb
 
     def forward(self, queries:List[str], tasks:List[Dict[str, str]], 
                 llms: List[Dict[str, str]], collabs:List[Dict[str, str]], given_task: Optional[List[int]] = None, 
@@ -121,7 +136,7 @@ class MasRouter(nn.Module):
         tasks_list = self._preprocess_data(tasks)
         llms_list = self._preprocess_data(llms)
         collabs_list = self._preprocess_data(collabs)
-        task_role_database, task_role_emb = self.encoder_roles() # task_role_database: Dict[str, List[Dict[str, str]]], task_role_emb: Dict[str, torch.Tensor]
+        task_role_database, task_role_emb = self._get_cached_roles() # role DB + embeddings are static for a run
 
         # Text embedding
         use_offline = item_ids is not None and dataset is not None
@@ -129,9 +144,23 @@ class MasRouter(nn.Module):
             queries_embedding = self.text_encoder(queries, query_ids=item_ids, dataset_name=dataset)
         else:
             queries_embedding = self.text_encoder(queries) # N_q*d tensor, N_q is the number of queries, d is the dimension of each query
-        tasks_embedding = self.text_encoder(tasks_list) # N_t*d tensor, N_t is the number of tasks, d is the dimension of each task
-        llms_embedding = self.text_encoder(llms_list) # N_l*d tensor, N_l is the number of llms, d is the dimension of each llm
-        collabs_embedding = self.text_encoder(collabs_list) # N_r*d tensor, N_r is the number of collabs, d is the dimension of each collab
+        tasks_key = tuple(tasks_list)
+        if self._cached_tasks_embedding is None or self._cached_tasks_key != tasks_key:
+            self._cached_tasks_embedding = self.text_encoder(tasks_list).to(self.device)
+            self._cached_tasks_key = tasks_key
+        tasks_embedding = self._cached_tasks_embedding
+
+        llms_key = tuple(llms_list)
+        if self._cached_llms_embedding is None or self._cached_llms_key != llms_key:
+            self._cached_llms_embedding = self.text_encoder(llms_list).to(self.device)
+            self._cached_llms_key = llms_key
+        llms_embedding = self._cached_llms_embedding
+
+        collabs_key = tuple(collabs_list)
+        if self._cached_collabs_embedding is None or self._cached_collabs_key != collabs_key:
+            self._cached_collabs_embedding = self.text_encoder(collabs_list).to(self.device)
+            self._cached_collabs_key = collabs_key
+        collabs_embedding = self._cached_collabs_embedding
         
         # Task classification
         selected_tasks_idx, tasks_probs, query_context = self.task_classifier(queries_embedding, tasks_embedding) # N_q, N_q*1，N_q*hidden_dim

@@ -165,6 +165,10 @@ DEFAULT_TELEMETRY_FIELDS: Sequence[str] = (
     "agent_roles_json",
     "agent_llms_json",
     "role_llm_map_json",
+    # LLM-specific workflow timing (wall-clock) captured by Graph.
+    # Kept separate from `duration_sec`, which is end-to-end workflow wall time.
+    "workflow_latency_seconds",
+    "llm_elapsed_seconds",
     "node_id",
     "node_name",
     "role_name",
