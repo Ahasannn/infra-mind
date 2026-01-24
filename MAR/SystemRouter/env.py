@@ -23,6 +23,7 @@ def _project_root() -> Path:
 def _get_test_config() -> Dict[str, object]:
     candidates = [
         _project_root() / "config_test.json",
+        _project_root() / "MAR" / "LLM" / "llm_profile_full.json",
         _project_root() / "logs" / "vllm" / "model_base_urls.json",
     ]
 

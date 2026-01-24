@@ -57,7 +57,7 @@ class SystemAwareRouter(nn.Module):
         super().__init__()
         self.device = device if device is not None else torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Defaults align with the local vLLM test pool (see `config_test.json` / `logs/vllm/model_base_urls.json`).
+        # Defaults align with the local vLLM test pool (see `config_test.json` / `MAR/LLM/llm_profile_full.json`).
         self.models = models or [
             "Qwen/Qwen2.5-3B-Instruct",
             "meta-llama/Llama-3.2-3B-Instruct",
