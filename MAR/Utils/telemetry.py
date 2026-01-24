@@ -196,6 +196,8 @@ DEFAULT_TELEMETRY_FIELDS: Sequence[str] = (
     "quality_feedback",
     "quality_state_json",
     "eval_duration_sec",
+    "arrival_rate",
+    "arrival_pattern",
 )
 
 
