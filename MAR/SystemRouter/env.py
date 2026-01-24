@@ -116,7 +116,7 @@ class SystemRouterEnv:
         prompt_file: Optional[str] = None,
         metrics_interval: float = 1.0,
         metrics_url_map: Optional[Dict[str, str]] = None,
-        request_timeout: float = 120.0,
+        request_timeout: float = 600.0,
         quality_fn: Optional[Callable[[str, Optional[List[str]], Optional[Any]], Tuple[Union[float, torch.Tensor], Dict[str, object]]]] = None,
     ) -> None:
         self.router = router
