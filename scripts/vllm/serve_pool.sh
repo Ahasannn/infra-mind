@@ -5,6 +5,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="${ROOT_DIR}/logs/vllm"
 mkdir -p "${LOG_DIR}"
 
+# ==============================================================================
+# CUDA CONFIGURATION (HPC Cluster)
+# ==============================================================================
+# Load CUDA module if not already loaded (required on HPC clusters)
+if ! command -v nvcc &> /dev/null; then
+  echo "[Setup] Loading CUDA module..."
+  module load cuda/12.8.1
+  echo "[Setup] CUDA loaded: $(nvcc --version | head -1)"
+else
+  echo "[Setup] CUDA already available: $(nvcc --version | head -1)"
+fi
+# ==============================================================================
+
 # GPU assignment (for a 2x GPU workstation)
 # - Two models run on GPU0
 # - One model runs on GPU1
