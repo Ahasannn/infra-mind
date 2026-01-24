@@ -73,6 +73,7 @@ def _get_test_config() -> Dict[str, Any]:
     """
     candidates = [
         _project_root() / "config_test.json",
+        _project_root() / "MAR" / "LLM" / "llm_profile_full.json",
         _project_root() / "logs" / "vllm" / "model_base_urls.json",
     ]
 
