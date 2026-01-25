@@ -6,6 +6,41 @@ LOG_DIR="${ROOT_DIR}/logs/vllm"
 mkdir -p "${LOG_DIR}"
 
 # ==============================================================================
+# STORAGE CONFIGURATION
+# ==============================================================================
+# All caches go to blue disk to avoid permission issues on /scratch/local
+STORAGE_ROOT="/blue/qi855292.ucf/ji757406.ucf"
+
+# Model weights cache
+export HF_HOME="${STORAGE_ROOT}/huggingface_cache"
+mkdir -p "${HF_HOME}"
+
+# PyTorch / Triton / TorchInductor caches (fixes PermissionError on /scratch/local)
+export TORCH_HOME="${STORAGE_ROOT}/torch_cache"
+export TRITON_CACHE_DIR="${STORAGE_ROOT}/triton_cache"
+export TRITON_HOME="${STORAGE_ROOT}/triton_cache"
+export TORCHINDUCTOR_CACHE_DIR="${STORAGE_ROOT}/torchinductor_cache"
+
+# Critical: Override TMPDIR to prevent writes to /scratch/local (Triton autotune uses this)
+export TMPDIR="${STORAGE_ROOT}/tmp"
+export TEMP="${STORAGE_ROOT}/tmp"
+export TMP="${STORAGE_ROOT}/tmp"
+
+# General cache locations
+export XDG_CACHE_HOME="${STORAGE_ROOT}/cache"
+export TORCH_EXTENSIONS_DIR="${STORAGE_ROOT}/torch_extensions"
+
+mkdir -p "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" \
+         "${TMPDIR}" "${XDG_CACHE_HOME}" "${TORCH_EXTENSIONS_DIR}"
+
+echo "[Setup] HF Cache (Weights):      ${HF_HOME}"
+echo "[Setup] Torch Cache:             ${TORCH_HOME}"
+echo "[Setup] Triton Cache:            ${TRITON_CACHE_DIR}"
+echo "[Setup] TorchInductor Cache:     ${TORCHINDUCTOR_CACHE_DIR}"
+echo "[Setup] TMPDIR:                  ${TMPDIR}"
+# ==============================================================================
+
+# ==============================================================================
 # CUDA CONFIGURATION (HPC Cluster)
 # ==============================================================================
 # Load CUDA module if not already loaded (required on HPC clusters)
@@ -210,6 +245,7 @@ start_server() {
     --gpu-memory-utilization "${gpu_mem_util}" \
     --max-model-len "${max_model_len}" \
     --tokenizer-mode "${tokenizer_mode}" \
+    --no-enable-prefix-caching \
     "${API_KEY_FLAGS[@]}" \
     "${TRUST_REMOTE_CODE_FLAGS[@]}" \
     >"${logfile}" 2>&1 &

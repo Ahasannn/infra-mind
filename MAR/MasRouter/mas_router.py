@@ -239,12 +239,7 @@ class MasRouter(nn.Module):
             router_agent_num_pred = entry["router_agent_num_pred"]
             router_task_probs_json = entry["router_task_probs_json"]
 
-            logger.info(f'Query: {query}')
-            logger.info(f'Task: {task["Name"]}')
-            logger.info(f'LLMs: {llm_names}')
-            logger.info(f'Reasoning: {collab["Name"]}')
-            logger.info(f'Roles: {role_names}')
-            logger.info('-----------------------------------')
+            # Verbose query/task logging removed - progress tracked at training level
 
             trace = GraphTrace()
             workflow_error = ""
