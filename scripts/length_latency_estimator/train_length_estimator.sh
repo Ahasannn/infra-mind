@@ -14,7 +14,7 @@ mkdir -p "${CHECKPOINT_DIR}"
 # ============================================================
 # Path to the training CSV file (from system router telemetry)
 # Expected columns: prompt_base, model_name, role_name, strategy_name, completion_tokens
-CSV_PATH="/home/ji757406.ucf/ahasan/system-aware-mas/logs/temp_test/system_router_mbpp_test.csv"  # <-- Set your CSV path here
+CSV_PATH="logs/temp_test/system_router_mbpp.csv"  # <-- Set your CSV path here
 
 # ============================================================
 # Training hyperparameters
@@ -25,9 +25,13 @@ EPOCHS=10
 LEARNING_RATE=1e-3
 MIN_LENGTH=1
 RECORD_TYPE="role_step"
+TRAIN_SPLIT=0.8
+VAL_SPLIT=0.1
+TEST_SPLIT=0.1
+SEED=42
 
 # Output checkpoint path
-OUTPUT_PATH="${CHECKPOINT_DIR}/length_estimator.pt"
+OUTPUT_PATH="${CHECKPOINT_DIR}/length_estimator_mbpp.pt"
 
 # ============================================================
 # Validation
@@ -60,6 +64,8 @@ echo "Output Path: ${OUTPUT_PATH}"
 echo "Epochs: ${EPOCHS}"
 echo "Batch Size: ${BATCH_SIZE}"
 echo "Learning Rate: ${LEARNING_RATE}"
+echo "Splits (train/val/test): ${TRAIN_SPLIT}/${VAL_SPLIT}/${TEST_SPLIT}"
+echo "Seed: ${SEED}"
 echo ""
 
 python Experiments/train_length_estimator.py \
@@ -70,6 +76,10 @@ python Experiments/train_length_estimator.py \
     --epochs ${EPOCHS} \
     --lr ${LEARNING_RATE} \
     --min-length ${MIN_LENGTH} \
+    --train-split ${TRAIN_SPLIT} \
+    --val-split ${VAL_SPLIT} \
+    --test-split ${TEST_SPLIT} \
+    --seed ${SEED} \
     --output-path "${OUTPUT_PATH}"
 
 echo ""
