@@ -1,45 +1,48 @@
 #!/usr/bin/env python3
 """
-Combine a new CSV file with a parent CSV file.
-Edit the paths below before running.
+Combine multiple CSV files into one output file.
+Edit INPUT_CSVS and OUTPUT_CSV before running.
 """
 
-import pandas as pd
 from pathlib import Path
 
-# ============ EDIT THESE PATHS ============
-PARENT_CSV = "logs/motivation_baseline_mbpp_arrival_rate_100.csv"
-NEW_CSV = "logs/motivation_baseline_mbpp_arrival_rate_150.csv"
-# ==========================================
+import pandas as pd
+
+# Paths relative to the project root.
+INPUT_CSVS = [
+    "logs/motivation_plot_generator_data/baseline_motivation_sweep_with_slack_10.csv",
+    "logs/motivation_plot_generator_data/baseline_motivation_sweep_with_slack_100.csv",
+    "logs/motivation_plot_generator_data/baseline_motivation_sweep_with_slack_400.csv"
+]
+OUTPUT_CSV = "logs/motivation_plot_generator_data/baseline_motivation_sweep_with_slack_10_100_400.csv"
 
 def main():
-    # Resolve paths relative to project root
     project_root = Path(__file__).parent.parent.parent
-    parent_path = project_root / PARENT_CSV
-    new_path = project_root / NEW_CSV
+    input_paths = [project_root / Path(p) for p in INPUT_CSVS]
+    output_path = project_root / Path(OUTPUT_CSV)
 
-    print(f"Parent CSV: {parent_path}")
-    print(f"New CSV: {new_path}")
+    print("Input CSVs:")
+    for path in input_paths:
+        print(f"  - {path}")
+    print(f"Output CSV: {output_path}")
 
-    # Load CSVs
-    parent_df = pd.read_csv(parent_path)
-    new_df = pd.read_csv(new_path)
+    combined_frames = []
+    for csv_path in input_paths:
+        df = pd.read_csv(csv_path)
+        print(f"{csv_path}: {len(df)} rows")
+        combined_frames.append(df)
 
-    print(f"\nParent rows: {len(parent_df)}")
-    print(f"New rows: {len(new_df)}")
-
-    # Combine
-    combined_df = pd.concat([parent_df, new_df], ignore_index=True)
+    combined_df = pd.concat(combined_frames, ignore_index=True)
     print(f"Combined rows: {len(combined_df)}")
 
-    # Save back to parent
-    combined_df.to_csv(parent_path, index=False)
-    print(f"\nSaved combined CSV to: {parent_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    combined_df.to_csv(output_path, index=False)
+    print(f"Saved combined CSV to: {output_path}")
 
-    # Show arrival rates in combined file
-    if 'arrival_rate' in combined_df.columns:
-        rates = sorted(combined_df['arrival_rate'].unique())
-        print(f"Arrival rates in combined file: {rates}")
+    if "arrival_rate" in combined_df.columns:
+        rates = sorted(combined_df["arrival_rate"].unique())
+        print(f"Arrival rates: {rates}")
+
 
 if __name__ == "__main__":
     main()

@@ -22,7 +22,12 @@ from MAR.Prompts.reasoning import reasoning_prompt
 
 def limit_prompt_for_llm(llm_model_name: str, system_prompt: str, user_prompt: str) -> str:
     max_model_len = get_model_max_context_len(llm_model_name)
-    prompt_budget = max(128, max_model_len - 512)
+    try:
+        max_out = int(get_model_max_output_tokens(llm_model_name))
+    except Exception:
+        max_out = 512
+    # Reserve space for the model's output plus a small overhead for chat formatting.
+    prompt_budget = max(0, max_model_len - max_out - 32)
     system_tokens = cal_token(llm_model_name, system_prompt)
     available = max(0, prompt_budget - system_tokens)
     if available <= 0:
@@ -66,9 +71,83 @@ def resolve_max_output_tokens(llm_model_name: str, prompt_messages, default_max_
     except Exception:
         prompt_tokens = 0
 
-    # Keep a small safety margin for tool / chat formatting overhead.
+    # Reserve a small overhead for chat formatting / tokenization mismatch.
     available = max(0, max_model_len - prompt_tokens - 32)
-    return max(16, min(int(default_max_output_tokens), available))
+
+    # Never request more tokens than are available, and never request <= 0.
+    # (A fixed floor like 16 can violate `available` and trigger server-side 400s.)
+    try:
+        default_max_output_tokens = int(default_max_output_tokens)
+    except Exception:
+        default_max_output_tokens = 512
+    return max(1, min(default_max_output_tokens, available))
+
+
+def fit_messages_to_context(
+    llm_model_name: str,
+    messages: List[Dict[str, str]],
+    max_context_len: int,
+    max_tokens: int,
+    extra_margin: int = 32,
+) -> tuple[List[Dict[str, str]], int, int]:
+    """
+    Ensure prompt + max_tokens fits within the context window by trimming the last user message.
+    Returns (messages, max_tokens, prompt_tokens).
+    """
+    try:
+        max_tokens = int(max_tokens)
+    except Exception:
+        max_tokens = 1
+    if max_tokens <= 0:
+        max_tokens = 1
+    max_context_len = int(max_context_len) if max_context_len else 0
+    if max_context_len <= 0 or not isinstance(messages, list) or not messages:
+        prompt_tokens = sum(
+            cal_token(llm_model_name, msg.get("content", "")) for msg in messages if isinstance(msg, dict)
+        )
+        return messages, max_tokens, prompt_tokens
+
+    def _count_tokens(msgs: List[Dict[str, str]]) -> int:
+        return sum(
+            cal_token(llm_model_name, msg.get("content", "")) for msg in msgs if isinstance(msg, dict)
+        )
+
+    prompt_tokens = _count_tokens(messages)
+    try:
+        extra_margin = int(extra_margin)
+    except Exception:
+        extra_margin = 32
+    if extra_margin < 0:
+        extra_margin = 0
+    reserve_tokens = max_tokens + extra_margin
+    if prompt_tokens + reserve_tokens <= max_context_len:
+        return messages, max_tokens, prompt_tokens
+
+    # Trim the last user message to fit the budget.
+    user_idx = None
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            user_idx = idx
+            break
+    if user_idx is None:
+        # No user message to trim; fall back to shrinking max_tokens only.
+        max_tokens = max(1, max_context_len - prompt_tokens - extra_margin)
+        return messages, max_tokens, prompt_tokens
+
+    other_tokens = _count_tokens([m for i, m in enumerate(messages) if i != user_idx])
+    budget = max_context_len - reserve_tokens
+    available_for_user = max(0, budget - other_tokens)
+    user_content = messages[user_idx].get("content", "")
+    trimmed_user = truncate_text_for_model(user_content, available_for_user, llm_model_name)
+
+    new_messages = [m if not isinstance(m, dict) else dict(m) for m in messages]
+    new_messages[user_idx]["content"] = trimmed_user
+    prompt_tokens = _count_tokens(new_messages)
+
+    if prompt_tokens + reserve_tokens > max_context_len:
+        max_tokens = max(1, max_context_len - prompt_tokens - extra_margin)
+    return new_messages, max_tokens, prompt_tokens
 
 
 @AgentRegistry.register('Agent')
@@ -215,17 +294,39 @@ class Agent(Node):
             if max_tokens > LLM.DEFAULT_MAX_TOKENS:
                 max_tokens = LLM.DEFAULT_MAX_TOKENS
 
+        max_context_len = get_model_max_context_len(self.llm.model_name)
+        messages, max_tokens, _ = fit_messages_to_context(
+            self.llm.model_name, messages, max_context_len, max_tokens
+        )
+
         start = time.perf_counter()
         first_token_time = None
         parts: List[str] = []
-        stream = client.chat.completions.create(
-            model=self.llm.model_name,
-            messages=messages,
-            stream=True,
-            max_tokens=max_tokens,
-            temperature=LLM.DEFAULT_TEMPERATURE,
-            timeout=timeout,
-        )
+        def _create_stream(msgs, max_out):
+            return client.chat.completions.create(
+                model=self.llm.model_name,
+                messages=msgs,
+                stream=True,
+                max_tokens=max_out,
+                temperature=LLM.DEFAULT_TEMPERATURE,
+                timeout=timeout,
+            )
+
+        try:
+            stream = _create_stream(messages, max_tokens)
+        except Exception as exc:
+            err = str(exc).lower()
+            if "max_tokens must be at least 1" in err or "context length" in err:
+                messages, max_tokens, _ = fit_messages_to_context(
+                    self.llm.model_name,
+                    messages,
+                    max_context_len,
+                    max_tokens,
+                    extra_margin=256,
+                )
+                stream = _create_stream(messages, max_tokens)
+            else:
+                raise
         for chunk in stream:
             if not hasattr(chunk, "choices"):
                 continue
@@ -391,17 +492,39 @@ class FinalRefer(Node):
             if max_tokens > LLM.DEFAULT_MAX_TOKENS:
                 max_tokens = LLM.DEFAULT_MAX_TOKENS
 
+        max_context_len = get_model_max_context_len(self.llm.model_name)
+        messages, max_tokens, _ = fit_messages_to_context(
+            self.llm.model_name, messages, max_context_len, max_tokens
+        )
+
         start = time.perf_counter()
         first_token_time = None
         parts: List[str] = []
-        stream = client.chat.completions.create(
-            model=self.llm.model_name,
-            messages=messages,
-            stream=True,
-            max_tokens=max_tokens,
-            temperature=LLM.DEFAULT_TEMPERATURE,
-            timeout=timeout,
-        )
+        def _create_stream(msgs, max_out):
+            return client.chat.completions.create(
+                model=self.llm.model_name,
+                messages=msgs,
+                stream=True,
+                max_tokens=max_out,
+                temperature=LLM.DEFAULT_TEMPERATURE,
+                timeout=timeout,
+            )
+
+        try:
+            stream = _create_stream(messages, max_tokens)
+        except Exception as exc:
+            err = str(exc).lower()
+            if "max_tokens must be at least 1" in err or "context length" in err:
+                messages, max_tokens, _ = fit_messages_to_context(
+                    self.llm.model_name,
+                    messages,
+                    max_context_len,
+                    max_tokens,
+                    extra_margin=256,
+                )
+                stream = _create_stream(messages, max_tokens)
+            else:
+                raise
         for chunk in stream:
             if not hasattr(chunk, "choices"):
                 continue

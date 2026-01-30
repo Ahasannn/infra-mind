@@ -10,6 +10,7 @@ import argparse
 import yaml
 import json
 import re
+from collections import Counter, defaultdict
 import torch
 from loguru import logger
 import torch.nn.functional as F
@@ -72,6 +73,11 @@ BASELINE_TEST_FIELDS = (
     "role_name",
     "llm_name",
     "latency_seconds",
+    "node_id",
+    "wave_max_latency_seconds",
+    "wave_slack_seconds",
+    "wave_slack_pct",
+    "wave_size",
     # vLLM system metrics
     "observed_ttft",
     "observed_tpot",
@@ -83,7 +89,27 @@ BASELINE_TEST_FIELDS = (
     "llm_e2e_avg",
     "llm_queue_avg",
     "llm_inference_avg",
+    "workflow_slack_seconds",
 )
+
+
+def _compute_wave_stats(transitions):
+    """Return per-(round_index, wave_index) max latency and wave size."""
+    wave_stats = {}
+    for step in transitions or []:
+        key = (step.get("round_index", ""), step.get("wave_index", ""))
+        try:
+            latency = float(step.get("latency_seconds", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            latency = 0.0
+        stat = wave_stats.get(key)
+        if stat is None:
+            wave_stats[key] = {"max_latency": latency, "count": 1}
+        else:
+            if latency > stat["max_latency"]:
+                stat["max_latency"] = latency
+            stat["count"] += 1
+    return wave_stats
 
 
 def load_result(result_file):
@@ -420,9 +446,39 @@ if __name__ == '__main__':
                 burst_duration=args.burst_duration,
                 seed=1234,
             )
+
+            # Track and log per-request failures from RequestShooter. These are handler-level
+            # failures (exceptions/timeouts/etc.), not "wrong answer" failures.
+            failure_counts = Counter()
+            failure_examples = defaultdict(list)
+            failure_printed = {"n": 0}
+            failure_print_limit = int(os.getenv("SHOOTER_FAILURE_LOG_LIMIT", "25"))
+            skipped_printed = {"n": 0}
+            skipped_print_limit = int(os.getenv("SHOOTER_SKIPPED_LOG_LIMIT", "25"))
+
             def on_workflow_complete(result):
-                """Callback to log progress as each workflow completes."""
+                """Callback to log progress as each workflow completes.
+
+                RequestShooter treats any exception in `handler` as a failed request. We log
+                per-failure reasons (rate-limited) so high-failure runs are debuggable.
+                """
                 test_progress.update(success=result.success, models=None)
+                if result.success:
+                    return
+                msg = (result.error or "").strip() or "<empty error>"
+                failure_counts[msg] += 1
+                if len(failure_examples[msg]) < 3:
+                    failure_examples[msg].append(result.item_id)
+                if failure_printed["n"] < failure_print_limit:
+                    logger.error(
+                        "[ShooterFail rate={}] item_id={} idx={} latency={:.2f}s err={}",
+                        arrival_rate,
+                        result.item_id,
+                        result.index,
+                        result.latency_seconds,
+                        msg,
+                    )
+                    failure_printed["n"] += 1
 
             shooter = RequestShooter(
                 pattern_gen,
@@ -463,6 +519,13 @@ if __name__ == '__main__':
 
                 skipped_indices = getattr(router, "last_skipped_indices", set())
                 if 0 in skipped_indices:
+                    if skipped_printed["n"] < skipped_print_limit:
+                        logger.warning(
+                            "[ShooterSkipped rate={}] item_id={} (router skipped request)",
+                            arrival_rate,
+                            item_id,
+                        )
+                        skipped_printed["n"] += 1
                     return None
                 return {
                     "query": query,
@@ -483,6 +546,26 @@ if __name__ == '__main__':
                 handler=handler,
                 item_id_fn=lambda row, idx: str(row.get("task_id", idx)),
             )
+
+            skipped_results = [r for r in results if r.success and r.output is None]
+            if skipped_results:
+                logger.warning(
+                    "[ShooterSkippedSummary rate={}] skipped={} (handler returned None)",
+                    arrival_rate,
+                    len(skipped_results),
+                )
+
+            if failure_counts:
+                total_failed = sum(failure_counts.values())
+                logger.warning(
+                    "[ShooterFailSummary rate={}] failed={} unique_reasons={}",
+                    arrival_rate,
+                    total_failed,
+                    len(failure_counts),
+                )
+                for msg, cnt in failure_counts.most_common(10):
+                    examples = ", ".join(failure_examples.get(msg, [])[:3])
+                    logger.warning("  {}x {} (e.g. item_id: {})", cnt, msg, examples or "n/a")
             for res in sorted(results, key=lambda r: r.index):
                 if not res.success:
                     continue
@@ -499,6 +582,17 @@ if __name__ == '__main__':
                 w_latency = payload.get("workflow_latency_seconds", 0.0)
                 l_elapsed = payload.get("llm_elapsed_seconds", 0.0)
                 transitions = payload.get("transitions", [])
+                wave_stats = _compute_wave_stats(transitions)
+                workflow_slack_seconds = 0.0
+                for step in transitions:
+                    key = (step.get("round_index", ""), step.get("wave_index", ""))
+                    try:
+                        latency = float(step.get("latency_seconds", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        latency = 0.0
+                    wave_max = float(wave_stats.get(key, {}).get("max_latency", 0.0) or 0.0)
+                    if wave_max > latency:
+                        workflow_slack_seconds += (wave_max - latency)
 
                 eval_start_ts = time.time()
                 match = re.search(pattern, result, re.DOTALL | re.MULTILINE)
@@ -530,11 +624,21 @@ if __name__ == '__main__':
                     "utility": utility,
                     "workflow_latency_seconds": w_latency,
                     "llm_elapsed_seconds": l_elapsed,
+                    "workflow_slack_seconds": workflow_slack_seconds,
                     "arrival_rate": arrival_rate,
                     "arrival_pattern": args.arrival_pattern,
                 })
                 # Step-level records with vLLM system metrics
                 for step in transitions:
+                    key = (step.get("round_index", ""), step.get("wave_index", ""))
+                    wave_max = float(wave_stats.get(key, {}).get("max_latency", 0.0) or 0.0)
+                    wave_size = int(wave_stats.get(key, {}).get("count", 0) or 0)
+                    try:
+                        latency = float(step.get("latency_seconds", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        latency = 0.0
+                    wave_slack = max(wave_max - latency, 0.0)
+                    wave_slack_pct = (wave_slack / wave_max * 100.0) if wave_max > 0 else 0.0
                     csv_rows.append({
                         "run_id": current_time,
                         "dataset": args.domain,
@@ -545,6 +649,7 @@ if __name__ == '__main__':
                         "quality_is_correct": bool(is_solved),
                         "workflow_latency_seconds": w_latency,
                         "llm_elapsed_seconds": l_elapsed,
+                        "workflow_slack_seconds": workflow_slack_seconds,
                         "arrival_rate": arrival_rate,
                         "arrival_pattern": args.arrival_pattern,
                         "step_index": step.get("step_index", ""),
@@ -553,6 +658,11 @@ if __name__ == '__main__':
                         "role_name": step.get("role_name", ""),
                         "llm_name": step.get("llm_name", ""),
                         "latency_seconds": step.get("latency_seconds", 0.0),
+                        "node_id": step.get("node_id", ""),
+                        "wave_max_latency_seconds": wave_max,
+                        "wave_slack_seconds": wave_slack,
+                        "wave_slack_pct": wave_slack_pct,
+                        "wave_size": wave_size,
                         # vLLM system metrics
                         "observed_ttft": step.get("observed_ttft", 0.0),
                         "observed_tpot": step.get("observed_tpot", 0.0),
@@ -610,6 +720,17 @@ if __name__ == '__main__':
                     w_latency = wf_data.get("workflow_latency_seconds", 0.0)
                     l_elapsed = wf_data.get("llm_elapsed_seconds", 0.0)
                     transitions = wf_data.get("transitions", [])
+                    wave_stats = _compute_wave_stats(transitions)
+                    workflow_slack_seconds = 0.0
+                    for step in transitions:
+                        key = (step.get("round_index", ""), step.get("wave_index", ""))
+                        try:
+                            latency = float(step.get("latency_seconds", 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            latency = 0.0
+                        wave_max = float(wave_stats.get(key, {}).get("max_latency", 0.0) or 0.0)
+                        if wave_max > latency:
+                            workflow_slack_seconds += (wave_max - latency)
 
                     eval_start_ts = time.time()
                     match = re.search(pattern, result, re.DOTALL|re.MULTILINE)
@@ -642,11 +763,21 @@ if __name__ == '__main__':
                         "utility": utility,
                         "workflow_latency_seconds": w_latency,
                         "llm_elapsed_seconds": l_elapsed,
+                        "workflow_slack_seconds": workflow_slack_seconds,
                         "arrival_rate": arrival_rate,
                         "arrival_pattern": args.arrival_pattern,
                     })
                     # Step-level records with vLLM system metrics
                     for step in transitions:
+                        key = (step.get("round_index", ""), step.get("wave_index", ""))
+                        wave_max = float(wave_stats.get(key, {}).get("max_latency", 0.0) or 0.0)
+                        wave_size = int(wave_stats.get(key, {}).get("count", 0) or 0)
+                        try:
+                            latency = float(step.get("latency_seconds", 0.0) or 0.0)
+                        except (TypeError, ValueError):
+                            latency = 0.0
+                        wave_slack = max(wave_max - latency, 0.0)
+                        wave_slack_pct = (wave_slack / wave_max * 100.0) if wave_max > 0 else 0.0
                         csv_rows.append({
                             "run_id": current_time,
                             "dataset": args.domain,
@@ -657,6 +788,7 @@ if __name__ == '__main__':
                             "quality_is_correct": bool(is_solved),
                             "workflow_latency_seconds": w_latency,
                             "llm_elapsed_seconds": l_elapsed,
+                            "workflow_slack_seconds": workflow_slack_seconds,
                             "arrival_rate": arrival_rate,
                             "arrival_pattern": args.arrival_pattern,
                             "step_index": step.get("step_index", ""),
@@ -665,6 +797,11 @@ if __name__ == '__main__':
                             "role_name": step.get("role_name", ""),
                             "llm_name": step.get("llm_name", ""),
                             "latency_seconds": step.get("latency_seconds", 0.0),
+                            "node_id": step.get("node_id", ""),
+                            "wave_max_latency_seconds": wave_max,
+                            "wave_slack_seconds": wave_slack,
+                            "wave_slack_pct": wave_slack_pct,
+                            "wave_size": wave_size,
                             # vLLM system metrics
                             "observed_ttft": step.get("observed_ttft", 0.0),
                             "observed_tpot": step.get("observed_tpot", 0.0),

@@ -87,6 +87,12 @@ def parse_args():
     parser.add_argument("--train-telemetry-csv", type=str, default="", help="CSV path for training telemetry.")
     parser.add_argument("--test-telemetry-csv", type=str, default="", help="CSV path for test telemetry.")
     parser.add_argument("--save-checkpoint", type=str, default="", help="Path to save training checkpoint.")
+    parser.add_argument(
+        "--dataset-root",
+        type=str,
+        default=os.environ.get("MATH_DATASET_ROOT", "Datasets/MATH"),
+        help="Root directory of the MATH dataset (expects train/ and test/).",
+    )
     args = parser.parse_args()
     return args
 
@@ -118,8 +124,21 @@ if __name__ == '__main__':
     args = parse_args()
     fix_random_seed(1234)
 
-    train_dataset = load_math_dataset("Datasets/MATH", split="train")
-    test_dataset = load_math_dataset("Datasets/MATH", split="test")
+    dataset_root = args.dataset_root
+    if not os.path.isabs(dataset_root):
+        dataset_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", dataset_root))
+    dataset_root = os.path.normpath(dataset_root)
+    train_dir = os.path.join(dataset_root, "train")
+    test_dir = os.path.join(dataset_root, "test")
+    if not os.path.isdir(train_dir) or not os.path.isdir(test_dir):
+        raise FileNotFoundError(
+            "MATH dataset not found. Expected directories at "
+            f"{train_dir} and {test_dir}. "
+            "Download and extract the dataset there, or pass --dataset-root."
+        )
+
+    train_dataset = load_math_dataset(dataset_root, split="train")
+    test_dataset = load_math_dataset(dataset_root, split="test")
 
     # Backwards compatible: `--limit` applies to both unless overridden.
     if args.limit and args.limit > 0:

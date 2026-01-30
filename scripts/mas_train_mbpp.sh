@@ -8,7 +8,7 @@ mkdir -p "${CHECKPOINT_DIR}"
 
 # Checkpoint and CSV paths
 CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_mbpp_train_full.pth"
-TELEMETRY_CSV="logs/baseline_mas_training/mas_train_mbpp_telemetry.csv"
+TELEMETRY_CSV="logs/baseline_mas_training/mas_train_mbpp_telemetry_last_epoch.csv"
 
 # Create logs directory if needed
 mkdir -p logs
@@ -21,8 +21,8 @@ export KEY="EMPTY"
 
 # Build command with conditional checkpoint loading
 CMD="python Experiments/run_mbpp.py \
-  --epochs 1 \
-  --batch_size 32 \
+  --epochs 2 \
+  --batch_size 16 \
   --lr 0.01 \
   --test_limit 1 \
   --train-telemetry-csv ${TELEMETRY_CSV} \
