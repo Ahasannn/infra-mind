@@ -3,9 +3,94 @@
 
 import os
 import sys
+import threading
+import time
+from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List, Optional
+
 from loguru import logger
+
 from MAR.Utils.const import MAR_ROOT
+
+
+class ProgressTracker:
+    """Track and log training/testing progress with model usage statistics."""
+
+    def __init__(self, total: int, phase: str = "Processing", log_interval: int = 10):
+        self.total = total
+        self.phase = phase
+        self.log_interval = log_interval
+        self.processed = 0
+        self.succeeded = 0
+        self.failed = 0
+        self.model_counts: Dict[str, int] = defaultdict(int)
+        self.start_time = time.time()
+        self._lock = threading.Lock()
+        self._last_log_count = 0
+
+    def update(self, success: bool = True, models: Optional[List[str]] = None) -> None:
+        """Update progress after processing a request."""
+        with self._lock:
+            self.processed += 1
+            if success:
+                self.succeeded += 1
+            else:
+                self.failed += 1
+            if models:
+                for model in models:
+                    self.model_counts[model] += 1
+            if self.processed - self._last_log_count >= self.log_interval:
+                self._log_progress()
+                self._last_log_count = self.processed
+
+    def _log_progress(self) -> None:
+        """Log current progress."""
+        elapsed = time.time() - self.start_time
+        pending = self.total - self.processed
+        pct = (self.processed / self.total * 100) if self.total > 0 else 0
+        rate = self.processed / elapsed if elapsed > 0 else 0
+        eta = pending / rate if rate > 0 else 0
+
+        logger.info(
+            "[{}] Progress: {}/{} ({:.1f}%) | Pending: {} | Success: {} | Failed: {} | Rate: {:.2f} req/s | ETA: {:.1f}s",
+            self.phase,
+            self.processed,
+            self.total,
+            pct,
+            pending,
+            self.succeeded,
+            self.failed,
+            rate,
+            eta,
+        )
+
+    def log_model_stats(self) -> None:
+        """Log model usage statistics."""
+        with self._lock:
+            if not self.model_counts:
+                return
+            logger.info("[{}] Model usage statistics:", self.phase)
+            sorted_models = sorted(self.model_counts.items(), key=lambda x: x[1], reverse=True)
+            for model, count in sorted_models:
+                pct = (count / self.processed * 100) if self.processed > 0 else 0
+                logger.info("  {} : {} requests ({:.1f}%)", model, count, pct)
+
+    def log_final_summary(self) -> None:
+        """Log final summary when phase completes."""
+        elapsed = time.time() - self.start_time
+        rate = self.processed / elapsed if elapsed > 0 else 0
+        logger.info(
+            "[{}] Completed: {}/{} | Success: {} | Failed: {} | Total time: {:.1f}s | Avg rate: {:.2f} req/s",
+            self.phase,
+            self.processed,
+            self.total,
+            self.succeeded,
+            self.failed,
+            elapsed,
+            rate,
+        )
+        self.log_model_stats()
 
 def configure_logging(print_level: str = "INFO", logfile_level: str = "DEBUG", log_name:str = "log.txt") -> None:
     """

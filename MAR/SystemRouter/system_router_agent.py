@@ -5,11 +5,13 @@ from loguru import logger
 
 from openai import OpenAI
 
+from MAR.Agent.agent import limit_prompt_for_llm, resolve_max_output_tokens, fit_messages_to_context
 from MAR.Agent.agent_registry import AgentRegistry
+from MAR.LLM.llm_profile_full import get_model_max_context_len, get_model_max_output_tokens
 from MAR.LLM.llm_registry import LLMRegistry
 from MAR.LLM.llm import LLM
 from MAR.LLM.gpt_chat import _resolve_api_key, _resolve_base_url
-from MAR.LLM.price import cost_count
+from MAR.LLM.price import cal_token, cost_count
 from MAR.Roles.role_registry import RoleRegistry
 from MAR.Graph.node import Node
 from MAR.Prompts.message_aggregation import message_aggregation, inner_test
@@ -97,6 +99,16 @@ class SystemRouterAgent(Node):
         if temporal_prompt:
             user_prompt += f"\n\nIn the last round of dialogue, other agents' outputs were:\n\n{temporal_prompt}"
 
+        trimmed_user_prompt = limit_prompt_for_llm(self.llm.model_name, system_prompt, user_prompt)
+        if trimmed_user_prompt != user_prompt:
+            logger.debug(
+                "Trimmed user prompt for %s from %d to %d tokens",
+                self.llm.model_name,
+                cal_token(self.llm.model_name, user_prompt),
+                cal_token(self.llm.model_name, trimmed_user_prompt),
+            )
+        user_prompt = trimmed_user_prompt
+
         self.prompt_base = f"{base_system}\n\n{user_prompt}".strip()
         return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
 
@@ -112,25 +124,76 @@ class SystemRouterAgent(Node):
             api_key=_resolve_api_key(),
             timeout=timeout,
         )
-        if max_tokens is None:
-            max_tokens = self.max_tokens or LLM.DEFAULT_MAX_TOKENS
-        else:
-            max_tokens = int(max_tokens)
-            if max_tokens <= 0:
-                max_tokens = 1
-            if max_tokens > LLM.DEFAULT_MAX_TOKENS:
-                max_tokens = LLM.DEFAULT_MAX_TOKENS
+        prompt_tokens = sum(
+            cal_token(self.llm_name, msg.get("content", "")) for msg in messages if isinstance(msg, dict)
+        )
+        max_context_len = get_model_max_context_len(self.llm_name)
+        default_max_out = self.max_tokens or get_model_max_output_tokens(self.llm_name)
+        allowed_max = resolve_max_output_tokens(self.llm_name, messages, default_max_out)
+        requested_max = None
+        if max_tokens is not None:
+            requested_max = int(max_tokens)
+            if requested_max <= 0:
+                requested_max = 1
+            if requested_max < allowed_max:
+                logger.debug(
+                    "Requested max_tokens=%d for %s; limiting to available %d",
+                    requested_max,
+                    self.llm_name,
+                    allowed_max,
+                )
+            allowed_max = min(requested_max, allowed_max)
+
+        # Safety margin for token counting mismatches vs the server tokenizer (e.g., vLLM).
+        safe_available = max(0, max_context_len - prompt_tokens - 32)
+        if safe_available <= 0:
+            logger.warning(
+                "Prompt for %s already consumes %d/%d tokens; forcing max_tokens=1",
+                self.llm_name,
+                prompt_tokens,
+                max_context_len,
+            )
+            allowed_max = 1
+        elif allowed_max > safe_available:
+            logger.debug(
+                "Reducing max_tokens for %s from %d to %d to stay within context window",
+                self.llm_name,
+                allowed_max,
+                safe_available,
+            )
+            allowed_max = safe_available
+        max_tokens = max(1, allowed_max)
+        messages, max_tokens, prompt_tokens = fit_messages_to_context(
+            self.llm_name, messages, max_context_len, max_tokens
+        )
         start = time.perf_counter()
         first_token_time = None
         parts: List[str] = []
-        stream = client.chat.completions.create(
-            model=self.llm_name,
-            messages=messages,
-            stream=True,
-            max_tokens=max_tokens,
-            temperature=LLM.DEFAULT_TEMPERATURE,
-            timeout=timeout,
-        )
+        def _create_stream(msgs, max_out):
+            return client.chat.completions.create(
+                model=self.llm_name,
+                messages=msgs,
+                stream=True,
+                max_tokens=max_out,
+                temperature=LLM.DEFAULT_TEMPERATURE,
+                timeout=timeout,
+            )
+
+        try:
+            stream = _create_stream(messages, max_tokens)
+        except Exception as exc:
+            err = str(exc).lower()
+            if "max_tokens must be at least 1" in err or "context length" in err:
+                messages, max_tokens, _ = fit_messages_to_context(
+                    self.llm_name,
+                    messages,
+                    max_context_len,
+                    max_tokens,
+                    extra_margin=256,
+                )
+                stream = _create_stream(messages, max_tokens)
+            else:
+                raise
         for chunk in stream:
             if not hasattr(chunk, "choices"):
                 continue
@@ -180,6 +243,15 @@ class SystemRouterAgent(Node):
                 f"{query}\nThe initial thinking information is:\n{response} \n "
                 "Please refer to the new format requirements when replying."
             )
+            trimmed_user_prompt = limit_prompt_for_llm(self.llm.model_name, system_prompt, user_prompt)
+            if trimmed_user_prompt != user_prompt:
+                logger.debug(
+                    "Trimmed post-format user prompt for %s from %d to %d tokens",
+                    self.llm.model_name,
+                    cal_token(self.llm.model_name, user_prompt),
+                    cal_token(self.llm.model_name, trimmed_user_prompt),
+                )
+            user_prompt = trimmed_user_prompt
             prompt = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
             response = self._call_llm_stream(prompt, max_tokens=max_tokens, request_timeout=request_timeout)
             logger.trace(f"post system prompt:\n {system_prompt}")

@@ -10,26 +10,95 @@ import argparse
 import yaml
 import json
 import re
+from collections import Counter, defaultdict
 import torch
 from loguru import logger
 import torch.nn.functional as F
 import glob
 
 from MAR.MasRouter.mas_router import MasRouter
-from MAR.LLM.llm_profile_full import llm_profile
+from MAR.LLM.llm_profile_full import llm_profile, model_base_urls
 from MAR.Agent.reasoning_profile import reasoning_profile
 from MAR.Prompts.tasks_profile import tasks_profile
 from MAR.Tools.coding.python_executor import PyExecutor
 from MAR.Utils.utils import fix_random_seed
 from MAR.Utils.globals import Cost, PromptTokens, CompletionTokens
-from MAR.Utils.log import configure_logging
+from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
 from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
+from MAR.SystemRouter.metrics_watcher import start_metrics_watcher, model_metrics
 
 from Datasets.mbpp_dataset import MbppDataset, MbppDataLoader
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+def _build_metrics_url_map_from_profile(base_urls: dict):
+    """Build metrics URL map from model_base_urls for vLLM metrics collection."""
+    urls = {}
+    for name, base_url in base_urls.items():
+        if not name or not base_url:
+            continue
+        # Convert base_url to metrics endpoint
+        base = base_url.rstrip("/")
+        if base.endswith("/v1"):
+            base = base[:-3].rstrip("/")
+        metrics_url = f"{base}/metrics"
+        urls[name] = metrics_url
+    return urls
+
+
+# CSV fields for test telemetry with LLM system metrics
+BASELINE_TEST_FIELDS = (
+    "run_id",
+    "dataset",
+    "split",
+    "batch_id",
+    "item_id",
+    "record_type",
+    # Topology / workflow metadata
+    "task_name",
+    "reasoning_name",
+    "graph_id",
+    "num_agents",
+    "agent_roles_json",
+    "agent_llms_json",
+    "role_llm_map_json",
+    # Quality evaluation
+    "quality_is_correct",
+    "quality_feedback",
+    "quality_state_json",
+    "eval_duration_sec",
+    "utility",
+    # Timing
+    "workflow_latency_seconds",
+    "llm_elapsed_seconds",
+    "arrival_rate",
+    "arrival_pattern",
+    # Step-level fields (for step records)
+    "step_index",
+    "round_index",
+    "dep_level",
+    "role_name",
+    "llm_name",
+    "latency_seconds",
+    "node_id",
+    "spatial_predecessors",
+    "spatial_successors",
+    # vLLM system metrics (pre-request snapshot)
+    "observed_ttft",
+    "observed_tpot",
+    "llm_running",
+    "llm_waiting",
+    "llm_kv_cache_usage",
+    "llm_ttft_avg",
+    "llm_itl_avg",
+    "llm_e2e_avg",
+    "llm_queue_avg",
+    "llm_inference_avg",
+)
+
 
 def load_result(result_file):
     if not result_file.exists():
@@ -93,6 +162,7 @@ def parse_args():
     parser.add_argument("--spike-intensity", type=float, default=10.0, help="Spike intensity for microburst.")
     parser.add_argument("--spike-period", type=float, default=20.0, help="Spike period for microburst.")
     parser.add_argument("--train-telemetry-csv", type=str, default="", help="CSV path for training telemetry.")
+    parser.add_argument("--test-telemetry-csv", type=str, default="", help="CSV path for test telemetry.")
     parser.add_argument("--save-checkpoint", type=str, default="", help="Path to save training checkpoint (single file, updated periodically).")
     args = parser.parse_args()
     return args
@@ -113,10 +183,12 @@ BASELINE_TRAIN_FIELDS = (
     "quality_is_solved",
     "step_index",
     "round_index",
-    "wave_index",
+    "dep_level",
     "role_name",
     "llm_name",
     "latency_seconds",
+    "spatial_predecessors",
+    "spatial_successors",
 )
 
 
@@ -156,19 +228,26 @@ if __name__ == '__main__':
     llms = llm_profile
     reasonings = reasoning_profile
     logger.info("Start training...")
-    
+
     episode_counter = 0
     checkpoint_dir = os.path.join("checkpoints", "mas_router")
     os.makedirs(checkpoint_dir, exist_ok=True)
     for epoch in range(args.epochs):
-        logger.info(f"Epoch {epoch}",80*'-')
         total_solved, total_executed = (0, 0)
         train_loader = MbppDataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+
+        # Initialize progress tracker for training
+        num_batches = (len(train_dataset) + args.batch_size - 1) // args.batch_size
+        train_progress = ProgressTracker(
+            total=len(train_dataset),
+            phase=f"Train Epoch {epoch}",
+            log_interval=max(1, len(train_dataset) // 10),
+        )
+
         if epoch < args.start_epoch:
             router.load_state_dict(torch.load(f"mbpp_router_epoch{epoch}_new.pth", map_location=torch.device('cuda')))
             continue
         for i_batch, current_batch in enumerate(train_loader):
-            logger.info(f"Batch {i_batch}",80*'-')
             start_ts = time.time()
             queries = [item['task'] for item in current_batch]
             tests = [item['test_list'] for item in current_batch]
@@ -259,10 +338,12 @@ if __name__ == '__main__':
                                 "record_type": "step",
                                 "step_index": step.get("step_index", ""),
                                 "round_index": step.get("round_index", ""),
-                                "wave_index": step.get("wave_index", ""),
+                                "dep_level": step.get("dep_level", ""),
                                 "role_name": step.get("role_name", ""),
                                 "llm_name": step.get("llm_name", ""),
                                 "latency_seconds": step.get("latency_seconds", 0.0),
+                                "spatial_predecessors": step.get("spatial_predecessors", ""),
+                                "spatial_successors": step.get("spatial_successors", ""),
                                 "llm_elapsed_seconds": step.get("llm_elapsed_seconds", llm_elapsed),
                             }
                         )
@@ -285,9 +366,18 @@ if __name__ == '__main__':
             optimizer.step()
             accuracy = total_solved / total_executed if total_executed else 0.0
 
-            logger.info(f"Batch time {time.time() - start_ts:.3f}")
-            logger.info(f"Accuracy: {accuracy}")
-            logger.info(f"utilities:{utilities}")
+            # Update progress tracker with model usage from workflows
+            models_used = []
+            for workflow in compact_workflows:
+                if workflow:
+                    for step in workflow.get("transitions", []):
+                        llm = step.get("llm_name", "")
+                        if llm:
+                            models_used.append(llm)
+            for _ in range(len(valid_indices)):
+                train_progress.update(success=True, models=models_used[:len(models_used)//max(1, len(valid_indices))] if models_used else None)
+            for _ in range(len(queries) - len(valid_indices)):
+                train_progress.update(success=False, models=None)
             if (i_batch + 1) % 5 == 0 and args.save_checkpoint:
                 # Periodic checkpoint update
                 ckpt_path = args.save_checkpoint
@@ -296,6 +386,9 @@ if __name__ == '__main__':
                 torch.save(router.state_dict(), tmp_path)
                 os.replace(tmp_path, ckpt_path)
                 logger.info(f"Saved checkpoint: {ckpt_path}")
+        # Log training progress summary for this epoch
+        train_progress.log_final_summary()
+
         # Save at end of each epoch
         if args.save_checkpoint:
             ckpt_path = args.save_checkpoint
@@ -303,24 +396,38 @@ if __name__ == '__main__':
             tmp_path = ckpt_path + ".tmp"
             torch.save(router.state_dict(), tmp_path)
             os.replace(tmp_path, ckpt_path)
-            logger.info(f"Saved checkpoint after epoch {epoch}: {ckpt_path}")
     logger.info("End training...")
     logger.info("Start testing...")
+
+    # Start metrics watcher for vLLM system metrics collection
+    metrics_url_map = _build_metrics_url_map_from_profile(model_base_urls)
+    if metrics_url_map:
+        logger.info(f"Starting metrics watcher for {len(metrics_url_map)} models: {list(metrics_url_map.keys())}")
+        start_metrics_watcher(metrics_url_map, interval=1.0)
+    else:
+        logger.warning("No metrics URL map built - metrics collection disabled")
 
     # Sweep through arrival rates
     arrival_rates = args.arrival_rate if isinstance(args.arrival_rate, list) else [args.arrival_rate]
     pattern = r'```python.*```'
 
-    # Create single CSV for all arrival rates
-    telemetry_csv = f"logs/{args.domain}_{current_time}_telemetry.csv"
+    # Create single CSV for all arrival rates with metrics fields
+    telemetry_csv = args.test_telemetry_csv or f"logs/{args.domain}_{current_time}_telemetry.csv"
     logger.info(f"Telemetry CSV: {telemetry_csv}")
-    quality_writer = CsvTelemetryWriter(telemetry_csv)
+    quality_writer = CsvTelemetryWriter(telemetry_csv, fieldnames=BASELINE_TEST_FIELDS)
 
     for arrival_rate in arrival_rates:
         logger.info(f"Testing with arrival_rate={arrival_rate}, arrival_pattern={args.arrival_pattern}")
         total_solved, total_executed = (0, 0)
         test_loader = MbppDataLoader(test_dataset, batch_size=args.batch_size, shuffle=True)
         use_shooter = arrival_rate > 0.0 or args.concurrency > 1
+
+        # Initialize progress tracker for testing
+        test_progress = ProgressTracker(
+            total=len(test_dataset),
+            phase=f"Test (rate={arrival_rate})",
+            log_interval=10,  # Log every 10 workflow completions
+        )
 
         if use_shooter:
             pattern_gen = RequestPattern(
@@ -331,11 +438,46 @@ if __name__ == '__main__':
                 burst_duration=args.burst_duration,
                 seed=1234,
             )
+
+            # Track and log per-request failures from RequestShooter. These are handler-level
+            # failures (exceptions/timeouts/etc.), not "wrong answer" failures.
+            failure_counts = Counter()
+            failure_examples = defaultdict(list)
+            failure_printed = {"n": 0}
+            failure_print_limit = int(os.getenv("SHOOTER_FAILURE_LOG_LIMIT", "25"))
+            skipped_printed = {"n": 0}
+            skipped_print_limit = int(os.getenv("SHOOTER_SKIPPED_LOG_LIMIT", "25"))
+
+            def on_workflow_complete(result):
+                """Callback to log progress as each workflow completes.
+
+                RequestShooter treats any exception in `handler` as a failed request. We log
+                per-failure reasons (rate-limited) so high-failure runs are debuggable.
+                """
+                test_progress.update(success=result.success, models=None)
+                if result.success:
+                    return
+                msg = (result.error or "").strip() or "<empty error>"
+                failure_counts[msg] += 1
+                if len(failure_examples[msg]) < 3:
+                    failure_examples[msg].append(result.item_id)
+                if failure_printed["n"] < failure_print_limit:
+                    logger.error(
+                        "[ShooterFail rate={}] item_id={} idx={} latency={:.2f}s err={}",
+                        arrival_rate,
+                        result.item_id,
+                        result.index,
+                        result.latency_seconds,
+                        msg,
+                    )
+                    failure_printed["n"] += 1
+
             shooter = RequestShooter(
                 pattern_gen,
                 max_concurrency=args.concurrency,
                 capture_output=True,
                 collect_results=True,
+                on_result=on_workflow_complete,
             )
 
             def handler(row):
@@ -351,7 +493,6 @@ if __name__ == '__main__':
                         reasonings,
                         task_labels,
                         prompt_file=args.prompt_file,
-                        telemetry_path=telemetry_csv,
                         item_ids=[item_id],
                         dataset=args.domain,
                         split="test",
@@ -360,16 +501,23 @@ if __name__ == '__main__':
                         request_timeout=args.request_timeout,
                     )
 
-                # --- UPDATED: Retrieve workflow latency info ---
+                # Retrieve workflow latency info and transitions with metrics
                 workflows = getattr(router, "last_compact_workflows", [])
                 # Handler processes 1 item, so we take the first workflow if available
                 wf_data = workflows[0] if workflows else {}
                 w_latency = wf_data.get("workflow_latency_seconds", 0.0)
                 l_elapsed = wf_data.get("llm_elapsed_seconds", 0.0)
-                # -----------------------------------------------
+                transitions = wf_data.get("transitions", [])
 
                 skipped_indices = getattr(router, "last_skipped_indices", set())
                 if 0 in skipped_indices:
+                    if skipped_printed["n"] < skipped_print_limit:
+                        logger.warning(
+                            "[ShooterSkipped rate={}] item_id={} (router skipped request)",
+                            arrival_rate,
+                            item_id,
+                        )
+                        skipped_printed["n"] += 1
                     return None
                 return {
                     "query": query,
@@ -378,9 +526,16 @@ if __name__ == '__main__':
                     "result": results[0],
                     "cost": costs[0],
                     "log_prob": log_probs[0],
-                    # Pass metrics to result payload
                     "workflow_latency_seconds": w_latency,
                     "llm_elapsed_seconds": l_elapsed,
+                    "transitions": transitions,
+                    "task_name": wf_data.get("task_name", ""),
+                    "reasoning_name": wf_data.get("reasoning_name", ""),
+                    "graph_id": wf_data.get("graph_id", ""),
+                    "num_agents": wf_data.get("num_agents", 0),
+                    "agent_roles_json": wf_data.get("agent_roles_json", ""),
+                    "agent_llms_json": wf_data.get("agent_llms_json", ""),
+                    "role_llm_map_json": wf_data.get("role_llm_map_json", ""),
                 }
 
             items = test_dataset.df.to_dict("records")
@@ -389,13 +544,31 @@ if __name__ == '__main__':
                 handler=handler,
                 item_id_fn=lambda row, idx: str(row.get("task_id", idx)),
             )
+
+            skipped_results = [r for r in results if r.success and r.output is None]
+            if skipped_results:
+                logger.warning(
+                    "[ShooterSkippedSummary rate={}] skipped={} (handler returned None)",
+                    arrival_rate,
+                    len(skipped_results),
+                )
+
+            if failure_counts:
+                total_failed = sum(failure_counts.values())
+                logger.warning(
+                    "[ShooterFailSummary rate={}] failed={} unique_reasons={}",
+                    arrival_rate,
+                    total_failed,
+                    len(failure_counts),
+                )
+                for msg, cnt in failure_counts.most_common(10):
+                    examples = ", ".join(failure_examples.get(msg, [])[:3])
+                    logger.warning("  {}x {} (e.g. item_id: {})", cnt, msg, examples or "n/a")
             for res in sorted(results, key=lambda r: r.index):
                 if not res.success:
-                    logger.warning("request_failed idx={} item_id={} error={}", res.index, res.item_id, res.error)
                     continue
                 payload = res.output
                 if payload is None:
-                    logger.warning("request_empty_output idx={} item_id={}", res.index, res.item_id)
                     continue
                 query = payload["query"]
                 test = payload["tests"]
@@ -403,10 +576,19 @@ if __name__ == '__main__':
                 result = payload["result"]
                 cost = payload["cost"]
 
-                # --- UPDATED: Extract metrics ---
                 w_latency = payload.get("workflow_latency_seconds", 0.0)
                 l_elapsed = payload.get("llm_elapsed_seconds", 0.0)
-                # --------------------------------
+                transitions = payload.get("transitions", [])
+
+                topo_meta = {
+                    "task_name": payload.get("task_name", ""),
+                    "reasoning_name": payload.get("reasoning_name", ""),
+                    "graph_id": payload.get("graph_id", ""),
+                    "num_agents": payload.get("num_agents", 0),
+                    "agent_roles_json": payload.get("agent_roles_json", ""),
+                    "agent_llms_json": payload.get("agent_llms_json", ""),
+                    "role_llm_map_json": payload.get("role_llm_map_json", ""),
+                }
 
                 eval_start_ts = time.time()
                 match = re.search(pattern, result, re.DOTALL | re.MULTILINE)
@@ -420,34 +602,68 @@ if __name__ == '__main__':
                 total_solved = total_solved + is_solved
                 total_executed = total_executed + 1
                 utility = is_solved - cost * args.cost_rate
-                quality_writer.append_rows(
-                    [
-                        {
-                            "run_id": current_time,
-                            "dataset": args.domain,
-                            "split": "test",
-                            "batch_id": "",
-                            "item_id": str(item_id),
-                            "record_type": "quality",
-                            "quality_is_correct": bool(is_solved),
-                            "quality_feedback": feedback,
-                            "quality_state_json": list(state) if state else "",
-                            "eval_duration_sec": time.time() - eval_start_ts,
-                            "utility": utility,
-                            # --- UPDATED: Save metrics to CSV ---
-                            "workflow_latency_seconds": w_latency,
-                            "llm_elapsed_seconds": l_elapsed,
-                            "arrival_rate": arrival_rate,
-                            "arrival_pattern": args.arrival_pattern,
-                        }
-                    ]
-                )
+
+                csv_rows = []
+                csv_rows.append({
+                    "run_id": current_time,
+                    "dataset": args.domain,
+                    "split": "test",
+                    "batch_id": "",
+                    "item_id": str(item_id),
+                    "record_type": "episode",
+                    **topo_meta,
+                    "quality_is_correct": bool(is_solved),
+                    "quality_feedback": feedback,
+                    "quality_state_json": list(state) if state else "",
+                    "eval_duration_sec": time.time() - eval_start_ts,
+                    "utility": utility,
+                    "workflow_latency_seconds": w_latency,
+                    "llm_elapsed_seconds": l_elapsed,
+                    "arrival_rate": arrival_rate,
+                    "arrival_pattern": args.arrival_pattern,
+                })
+                for step in transitions:
+                    csv_rows.append({
+                        "run_id": current_time,
+                        "dataset": args.domain,
+                        "split": "test",
+                        "batch_id": "",
+                        "item_id": str(item_id),
+                        "record_type": "step",
+                        **topo_meta,
+                        "quality_is_correct": bool(is_solved),
+                        "workflow_latency_seconds": w_latency,
+                        "llm_elapsed_seconds": l_elapsed,
+                        "arrival_rate": arrival_rate,
+                        "arrival_pattern": args.arrival_pattern,
+                        "step_index": step.get("step_index", ""),
+                        "round_index": step.get("round_index", ""),
+                        "dep_level": step.get("dep_level", ""),
+                        "role_name": step.get("role_name", ""),
+                        "llm_name": step.get("llm_name", ""),
+                        "latency_seconds": step.get("latency_seconds", 0.0),
+                        "node_id": step.get("node_id", ""),
+                        "spatial_predecessors": step.get("spatial_predecessors", ""),
+                        "spatial_successors": step.get("spatial_successors", ""),
+                        # vLLM system metrics
+                        "observed_ttft": step.get("observed_ttft", 0.0),
+                        "observed_tpot": step.get("observed_tpot", 0.0),
+                        "llm_running": step.get("llm_running", 0),
+                        "llm_waiting": step.get("llm_waiting", 0),
+                        "llm_kv_cache_usage": step.get("llm_kv_cache_usage", 0.0),
+                        "llm_ttft_avg": step.get("llm_ttft_avg", 0.0),
+                        "llm_itl_avg": step.get("llm_itl_avg", 0.0),
+                        "llm_e2e_avg": step.get("llm_e2e_avg", 0.0),
+                        "llm_queue_avg": step.get("llm_queue_avg", 0.0),
+                        "llm_inference_avg": step.get("llm_inference_avg", 0.0),
+                    })
+                quality_writer.append_rows(csv_rows)
+            test_progress.log_final_summary()
             accuracy = total_solved / total_executed if total_executed else 0.0
             logger.info("Shot {} requests. Accuracy: {}", total_executed, accuracy)
         else:
             for i_batch, current_batch in enumerate(test_loader):
                 start_ts = time.time()
-                logger.info(f"Batch {i_batch}",80*'-')
                 queries = [item['task'] for item in current_batch]
                 tests = [item['test_list'] for item in current_batch]
                 item_ids = [item["task_id"] for item in current_batch]
@@ -461,7 +677,6 @@ if __name__ == '__main__':
                     reasonings,
                     task_labels,
                     prompt_file=args.prompt_file,
-                    telemetry_path=telemetry_csv,
                     item_ids=item_ids,
                     dataset=args.domain,
                     split="test",
@@ -470,9 +685,8 @@ if __name__ == '__main__':
                     request_timeout=args.request_timeout,
                 )
 
-                # --- UPDATED: Retrieve batch workflows ---
+                # Retrieve batch workflows with transitions
                 compact_workflows = getattr(router, "last_compact_workflows", [])
-                # -----------------------------------------
 
                 utilities = []
                 skipped_indices = getattr(router, "last_skipped_indices", set())
@@ -480,14 +694,23 @@ if __name__ == '__main__':
                     zip(item_ids, queries, results, tests, log_probs, costs)
                 ):
                     if idx in skipped_indices:
-                        logger.warning("request_timeout idx={} item_id={}", idx, item_id)
+                        test_progress.update(success=False, models=None)
                         continue
 
-                    # --- UPDATED: Get metrics for specific item in batch ---
                     wf_data = compact_workflows[idx] if idx < len(compact_workflows) else {}
                     w_latency = wf_data.get("workflow_latency_seconds", 0.0)
                     l_elapsed = wf_data.get("llm_elapsed_seconds", 0.0)
-                    # -------------------------------------------------------
+                    transitions = wf_data.get("transitions", [])
+
+                    topo_meta = {
+                        "task_name": wf_data.get("task_name", ""),
+                        "reasoning_name": wf_data.get("reasoning_name", ""),
+                        "graph_id": wf_data.get("graph_id", ""),
+                        "num_agents": wf_data.get("num_agents", 0),
+                        "agent_roles_json": wf_data.get("agent_roles_json", ""),
+                        "agent_llms_json": wf_data.get("agent_llms_json", ""),
+                        "role_llm_map_json": wf_data.get("role_llm_map_json", ""),
+                    }
 
                     eval_start_ts = time.time()
                     match = re.search(pattern, result, re.DOTALL|re.MULTILINE)
@@ -502,31 +725,65 @@ if __name__ == '__main__':
                     total_executed = total_executed + 1
                     utility = is_solved - cost * args.cost_rate
                     utilities.append(utility)
-                    quality_writer.append_rows(
-                        [
-                            {
-                                "run_id": current_time,
-                                "dataset": args.domain,
-                                "split": "test",
-                                "batch_id": i_batch,
-                                "item_id": str(item_id),
-                                "record_type": "quality",
-                                "quality_is_correct": bool(is_solved),
-                                "quality_feedback": feedback,
-                                "quality_state_json": list(state) if state else "",
-                                "eval_duration_sec": time.time() - eval_start_ts,
-                                "utility": utility,
-                                # --- UPDATED: Save metrics to CSV ---
-                                "workflow_latency_seconds": w_latency,
-                                "llm_elapsed_seconds": l_elapsed,
-                                "arrival_rate": arrival_rate,
-                                "arrival_pattern": args.arrival_pattern,
-                            }
-                        ]
-                    )
 
-                accuracy = total_solved / total_executed if total_executed else 0.0
-                logger.info(f"Batch time {time.time() - start_ts:.3f}")
-                logger.info(f"Accuracy: {accuracy}")
-                logger.info(f"utilities:{utilities}")
-        logger.info(f"End testing for arrival_rate={arrival_rate}")
+                    csv_rows = []
+                    csv_rows.append({
+                        "run_id": current_time,
+                        "dataset": args.domain,
+                        "split": "test",
+                        "batch_id": i_batch,
+                        "item_id": str(item_id),
+                        "record_type": "episode",
+                        **topo_meta,
+                        "quality_is_correct": bool(is_solved),
+                        "quality_feedback": feedback,
+                        "quality_state_json": list(state) if state else "",
+                        "eval_duration_sec": time.time() - eval_start_ts,
+                        "utility": utility,
+                        "workflow_latency_seconds": w_latency,
+                        "llm_elapsed_seconds": l_elapsed,
+                        "arrival_rate": arrival_rate,
+                        "arrival_pattern": args.arrival_pattern,
+                    })
+                    for step in transitions:
+                        csv_rows.append({
+                            "run_id": current_time,
+                            "dataset": args.domain,
+                            "split": "test",
+                            "batch_id": i_batch,
+                            "item_id": str(item_id),
+                            "record_type": "step",
+                            **topo_meta,
+                            "quality_is_correct": bool(is_solved),
+                            "workflow_latency_seconds": w_latency,
+                            "llm_elapsed_seconds": l_elapsed,
+                            "arrival_rate": arrival_rate,
+                            "arrival_pattern": args.arrival_pattern,
+                            "step_index": step.get("step_index", ""),
+                            "round_index": step.get("round_index", ""),
+                            "dep_level": step.get("dep_level", ""),
+                            "role_name": step.get("role_name", ""),
+                            "llm_name": step.get("llm_name", ""),
+                            "latency_seconds": step.get("latency_seconds", 0.0),
+                            "node_id": step.get("node_id", ""),
+                            "spatial_predecessors": step.get("spatial_predecessors", ""),
+                            "spatial_successors": step.get("spatial_successors", ""),
+                            # vLLM system metrics
+                            "observed_ttft": step.get("observed_ttft", 0.0),
+                            "observed_tpot": step.get("observed_tpot", 0.0),
+                            "llm_running": step.get("llm_running", 0),
+                            "llm_waiting": step.get("llm_waiting", 0),
+                            "llm_kv_cache_usage": step.get("llm_kv_cache_usage", 0.0),
+                            "llm_ttft_avg": step.get("llm_ttft_avg", 0.0),
+                            "llm_itl_avg": step.get("llm_itl_avg", 0.0),
+                            "llm_e2e_avg": step.get("llm_e2e_avg", 0.0),
+                            "llm_queue_avg": step.get("llm_queue_avg", 0.0),
+                            "llm_inference_avg": step.get("llm_inference_avg", 0.0),
+                        })
+                    quality_writer.append_rows(csv_rows)
+                    test_progress.update(success=True, models=None)
+
+            # Log test progress summary
+            test_progress.log_final_summary()
+            accuracy = total_solved / total_executed if total_executed else 0.0
+            logger.info(f"Final accuracy for arrival_rate={arrival_rate}: {accuracy}")

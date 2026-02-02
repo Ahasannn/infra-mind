@@ -1,12 +1,17 @@
-from typing import Dict
+from typing import Dict, List
 import json
 import os
+import time
 from loguru import logger
+
+from openai import OpenAI
 
 from MAR.Agent.agent_registry import AgentRegistry
 from MAR.LLM.llm_profile_full import get_model_max_context_len, get_model_max_output_tokens
 from MAR.LLM.llm_registry import LLMRegistry
-from MAR.LLM.price import cal_token, truncate_text_for_model
+from MAR.LLM.llm import LLM
+from MAR.LLM.gpt_chat import _resolve_api_key, _resolve_base_url
+from MAR.LLM.price import cal_token, truncate_text_for_model, cost_count
 from MAR.Roles.role_registry import RoleRegistry
 from MAR.Graph.node import Node
 from MAR.Prompts.message_aggregation import message_aggregation,inner_test
@@ -17,7 +22,12 @@ from MAR.Prompts.reasoning import reasoning_prompt
 
 def limit_prompt_for_llm(llm_model_name: str, system_prompt: str, user_prompt: str) -> str:
     max_model_len = get_model_max_context_len(llm_model_name)
-    prompt_budget = max(128, max_model_len - 512)
+    try:
+        max_out = int(get_model_max_output_tokens(llm_model_name))
+    except Exception:
+        max_out = 512
+    # Reserve space for the model's output plus a small overhead for chat formatting.
+    prompt_budget = max(0, max_model_len - max_out - 32)
     system_tokens = cal_token(llm_model_name, system_prompt)
     available = max(0, prompt_budget - system_tokens)
     if available <= 0:
@@ -61,9 +71,83 @@ def resolve_max_output_tokens(llm_model_name: str, prompt_messages, default_max_
     except Exception:
         prompt_tokens = 0
 
-    # Keep a small safety margin for tool / chat formatting overhead.
+    # Reserve a small overhead for chat formatting / tokenization mismatch.
     available = max(0, max_model_len - prompt_tokens - 32)
-    return max(16, min(int(default_max_output_tokens), available))
+
+    # Never request more tokens than are available, and never request <= 0.
+    # (A fixed floor like 16 can violate `available` and trigger server-side 400s.)
+    try:
+        default_max_output_tokens = int(default_max_output_tokens)
+    except Exception:
+        default_max_output_tokens = 512
+    return max(1, min(default_max_output_tokens, available))
+
+
+def fit_messages_to_context(
+    llm_model_name: str,
+    messages: List[Dict[str, str]],
+    max_context_len: int,
+    max_tokens: int,
+    extra_margin: int = 32,
+) -> tuple[List[Dict[str, str]], int, int]:
+    """
+    Ensure prompt + max_tokens fits within the context window by trimming the last user message.
+    Returns (messages, max_tokens, prompt_tokens).
+    """
+    try:
+        max_tokens = int(max_tokens)
+    except Exception:
+        max_tokens = 1
+    if max_tokens <= 0:
+        max_tokens = 1
+    max_context_len = int(max_context_len) if max_context_len else 0
+    if max_context_len <= 0 or not isinstance(messages, list) or not messages:
+        prompt_tokens = sum(
+            cal_token(llm_model_name, msg.get("content", "")) for msg in messages if isinstance(msg, dict)
+        )
+        return messages, max_tokens, prompt_tokens
+
+    def _count_tokens(msgs: List[Dict[str, str]]) -> int:
+        return sum(
+            cal_token(llm_model_name, msg.get("content", "")) for msg in msgs if isinstance(msg, dict)
+        )
+
+    prompt_tokens = _count_tokens(messages)
+    try:
+        extra_margin = int(extra_margin)
+    except Exception:
+        extra_margin = 32
+    if extra_margin < 0:
+        extra_margin = 0
+    reserve_tokens = max_tokens + extra_margin
+    if prompt_tokens + reserve_tokens <= max_context_len:
+        return messages, max_tokens, prompt_tokens
+
+    # Trim the last user message to fit the budget.
+    user_idx = None
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            user_idx = idx
+            break
+    if user_idx is None:
+        # No user message to trim; fall back to shrinking max_tokens only.
+        max_tokens = max(1, max_context_len - prompt_tokens - extra_margin)
+        return messages, max_tokens, prompt_tokens
+
+    other_tokens = _count_tokens([m for i, m in enumerate(messages) if i != user_idx])
+    budget = max_context_len - reserve_tokens
+    available_for_user = max(0, budget - other_tokens)
+    user_content = messages[user_idx].get("content", "")
+    trimmed_user = truncate_text_for_model(user_content, available_for_user, llm_model_name)
+
+    new_messages = [m if not isinstance(m, dict) else dict(m) for m in messages]
+    new_messages[user_idx]["content"] = trimmed_user
+    prompt_tokens = _count_tokens(new_messages)
+
+    if prompt_tokens + reserve_tokens > max_context_len:
+        max_tokens = max(1, max_context_len - prompt_tokens - extra_margin)
+    return new_messages, max_tokens, prompt_tokens
 
 
 @AgentRegistry.register('Agent')
@@ -89,6 +173,11 @@ class Agent(Node):
         self.post_process = self.role.get_post_process()
         self.post_description = self.role.get_post_description()
         self.post_output_format = self.role.get_post_output_format()
+
+        # Timing metrics for telemetry (like SystemRouterAgent)
+        self.last_ttft = 0.0
+        self.last_tpot = 0.0
+
         # Reflect
         if reason_name == "Reflection" and self.post_output_format == "None":
             self.post_output_format = self.output_format
@@ -183,6 +272,89 @@ class Agent(Node):
         self.llm_name = llm_name
         self.llm = LLMRegistry.get(llm_name)
 
+    def _call_llm_stream(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int | None = None,
+        request_timeout: float | None = None,
+    ) -> str:
+        """Call LLM with streaming to capture TTFT and TPOT metrics."""
+        timeout = request_timeout if request_timeout is not None else 120.0
+        client = OpenAI(
+            base_url=_resolve_base_url(self.llm.model_name),
+            api_key=_resolve_api_key(),
+            timeout=timeout,
+        )
+        if max_tokens is None:
+            max_tokens = LLM.DEFAULT_MAX_TOKENS
+        else:
+            max_tokens = int(max_tokens)
+            if max_tokens <= 0:
+                max_tokens = 1
+            if max_tokens > LLM.DEFAULT_MAX_TOKENS:
+                max_tokens = LLM.DEFAULT_MAX_TOKENS
+
+        max_context_len = get_model_max_context_len(self.llm.model_name)
+        messages, max_tokens, _ = fit_messages_to_context(
+            self.llm.model_name, messages, max_context_len, max_tokens
+        )
+
+        start = time.perf_counter()
+        first_token_time = None
+        parts: List[str] = []
+        def _create_stream(msgs, max_out):
+            return client.chat.completions.create(
+                model=self.llm.model_name,
+                messages=msgs,
+                stream=True,
+                max_tokens=max_out,
+                temperature=LLM.DEFAULT_TEMPERATURE,
+                timeout=timeout,
+            )
+
+        try:
+            stream = _create_stream(messages, max_tokens)
+        except Exception as exc:
+            err = str(exc).lower()
+            if "max_tokens must be at least 1" in err or "context length" in err:
+                messages, max_tokens, _ = fit_messages_to_context(
+                    self.llm.model_name,
+                    messages,
+                    max_context_len,
+                    max_tokens,
+                    extra_margin=256,
+                )
+                stream = _create_stream(messages, max_tokens)
+            else:
+                raise
+        for chunk in stream:
+            if not hasattr(chunk, "choices"):
+                continue
+            delta = chunk.choices[0].delta
+            text = getattr(delta, "content", "")
+            if text:
+                if first_token_time is None:
+                    first_token_time = time.perf_counter()
+                parts.append(text)
+        end = time.perf_counter()
+        response = "".join(parts)
+
+        # Compute TTFT and TPOT
+        if first_token_time is None:
+            self.last_ttft = 0.0
+            self.last_tpot = 0.0
+        else:
+            ttft = first_token_time - start
+            total_tokens = max(len(response.split()), 1)
+            tpot = (end - start - ttft) / total_tokens
+            self.last_ttft = float(ttft)
+            self.last_tpot = float(tpot)
+
+        # Track cost
+        prompt_text = "".join([item["content"] for item in messages])
+        cost_count(prompt_text, response, self.llm.model_name)
+        return response
+
     def _execute(self, input:Dict[str,str],  spatial_info:Dict[str,Dict], temporal_info:Dict[str,Dict],**kwargs):
         """
         Run the agent.
@@ -201,7 +373,7 @@ class Agent(Node):
         request_timeout = kwargs.get("request_timeout")
         default_max_out = get_model_max_output_tokens(self.llm.model_name)
         max_out = resolve_max_output_tokens(self.llm.model_name, prompt, default_max_out)
-        response = self.llm.gen(prompt, max_tokens=max_out, request_timeout=request_timeout)
+        response = self._call_llm_stream(prompt, max_tokens=max_out, request_timeout=request_timeout)
         response = post_process(input, response, self.post_process)
         logger.trace(f"Agent {self.id} Role: {self.role.role} LLM: {self.llm.model_name}")
         logger.trace(f"system prompt:\n {prompt[0]['content']}")
@@ -247,7 +419,7 @@ class Agent(Node):
             trimmed_user = self._enforce_budget(system_prompt, user_prompt, prompt_budget)
             prompt = [{'role':'system','content':system_prompt},{'role':'user','content':trimmed_user}]
             max_out = resolve_max_output_tokens(self.llm.model_name, prompt, default_max_out)
-            response = self.llm.gen(prompt, max_tokens=max_out, request_timeout=request_timeout)
+            response = self._call_llm_stream(prompt, max_tokens=max_out, request_timeout=request_timeout)
             logger.trace(f"post system prompt:\n {system_prompt}")
             logger.trace(f"post user prompt:\n {trimmed_user}")
             logger.trace(f"post response:\n {response}")
@@ -291,9 +463,95 @@ class FinalRefer(Node):
         super().__init__(id, agent_name, domain, llm_name)
         self.llm = LLMRegistry.get(llm_name)
         self.prompt_file = json.load(open(f"{prompt_file}", 'r', encoding='utf-8'))
+        # Timing metrics for telemetry
+        self.last_ttft = 0.0
+        self.last_tpot = 0.0
 
     def _limit_prompt(self, system_prompt: str, user_prompt: str) -> str:
         return limit_prompt_for_llm(self.llm.model_name, system_prompt, user_prompt)
+
+    def _call_llm_stream(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int | None = None,
+        request_timeout: float | None = None,
+    ) -> str:
+        """Call LLM with streaming to capture TTFT and TPOT metrics."""
+        timeout = request_timeout if request_timeout is not None else 120.0
+        client = OpenAI(
+            base_url=_resolve_base_url(self.llm.model_name),
+            api_key=_resolve_api_key(),
+            timeout=timeout,
+        )
+        if max_tokens is None:
+            max_tokens = LLM.DEFAULT_MAX_TOKENS
+        else:
+            max_tokens = int(max_tokens)
+            if max_tokens <= 0:
+                max_tokens = 1
+            if max_tokens > LLM.DEFAULT_MAX_TOKENS:
+                max_tokens = LLM.DEFAULT_MAX_TOKENS
+
+        max_context_len = get_model_max_context_len(self.llm.model_name)
+        messages, max_tokens, _ = fit_messages_to_context(
+            self.llm.model_name, messages, max_context_len, max_tokens
+        )
+
+        start = time.perf_counter()
+        first_token_time = None
+        parts: List[str] = []
+        def _create_stream(msgs, max_out):
+            return client.chat.completions.create(
+                model=self.llm.model_name,
+                messages=msgs,
+                stream=True,
+                max_tokens=max_out,
+                temperature=LLM.DEFAULT_TEMPERATURE,
+                timeout=timeout,
+            )
+
+        try:
+            stream = _create_stream(messages, max_tokens)
+        except Exception as exc:
+            err = str(exc).lower()
+            if "max_tokens must be at least 1" in err or "context length" in err:
+                messages, max_tokens, _ = fit_messages_to_context(
+                    self.llm.model_name,
+                    messages,
+                    max_context_len,
+                    max_tokens,
+                    extra_margin=256,
+                )
+                stream = _create_stream(messages, max_tokens)
+            else:
+                raise
+        for chunk in stream:
+            if not hasattr(chunk, "choices"):
+                continue
+            delta = chunk.choices[0].delta
+            text = getattr(delta, "content", "")
+            if text:
+                if first_token_time is None:
+                    first_token_time = time.perf_counter()
+                parts.append(text)
+        end = time.perf_counter()
+        response = "".join(parts)
+
+        # Compute TTFT and TPOT
+        if first_token_time is None:
+            self.last_ttft = 0.0
+            self.last_tpot = 0.0
+        else:
+            ttft = first_token_time - start
+            total_tokens = max(len(response.split()), 1)
+            tpot = (end - start - ttft) / total_tokens
+            self.last_ttft = float(ttft)
+            self.last_tpot = float(tpot)
+
+        # Track cost
+        prompt_text = "".join([item["content"] for item in messages])
+        cost_count(prompt_text, response, self.llm.model_name)
+        return response
 
     def _process_inputs(self, raw_inputs, spatial_info, temporal_info, **kwargs):  
         system_prompt = f"{self.prompt_file['system']}"
@@ -309,7 +567,7 @@ class FinalRefer(Node):
         request_timeout = kwargs.get("request_timeout")
         default_max_out = get_model_max_output_tokens(self.llm.model_name)
         max_out = resolve_max_output_tokens(self.llm.model_name, prompt, default_max_out)
-        response = self.llm.gen(prompt, max_tokens=max_out, request_timeout=request_timeout)
+        response = self._call_llm_stream(prompt, max_tokens=max_out, request_timeout=request_timeout)
         logger.trace(f"Final Refer Node LLM: {self.llm.model_name}")
         logger.trace(f"Final System Prompt:\n {prompt[0]['content']}")
         logger.trace(f"Final User Prompt:\n {prompt[1]['content']}")
