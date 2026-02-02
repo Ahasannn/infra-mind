@@ -3,10 +3,12 @@ import os
 import random
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 from loguru import logger
 import torch
+
+from MAR.Utils.log import ProgressTracker
 
 from MAR.SystemRouter.datasets import SystemRouterSample, available_datasets, get_dataset_adapter
 from MAR.SystemRouter.env import SystemRouterEnv
@@ -51,6 +53,10 @@ SYSTEM_ROUTER_CSV_FIELDS: Sequence[str] = (
     "strategy_name",
     "latency_seconds",
     "budget_remaining",
+    "round_index",
+    "dep_level",
+    "spatial_predecessors",
+    "spatial_successors",
     "observed_ttft",
     "observed_tpot",
     "llm_running",
@@ -59,6 +65,8 @@ SYSTEM_ROUTER_CSV_FIELDS: Sequence[str] = (
     "llm_ttft_avg",
     "llm_itl_avg",
     "llm_e2e_avg",
+    "llm_queue_avg",
+    "llm_inference_avg",
     "prompt_base",
     "response_final",
 )
@@ -267,6 +275,14 @@ def main(default_dataset: str = "mbpp") -> None:
             workflow_latencies: List[float] = []
             use_shooter = arrival_rate > 0.0 or args.concurrency > 1
 
+            # Initialize progress tracker for this epoch
+            phase_name = f"Epoch {global_epoch}"
+            progress = ProgressTracker(
+                total=len(data),
+                phase=phase_name,
+                log_interval=max(1, len(data) // 10),  # Log ~10 times per epoch
+            )
+
             def process_episode(sample_idx: int, sample: SystemRouterSample, episode: Dict[str, Any]) -> None:
                 nonlocal episode_counter, last_checkpoint_episode
                 query = sample.query
@@ -275,7 +291,12 @@ def main(default_dataset: str = "mbpp") -> None:
                 answer = sample.answer
 
                 if _episode_has_agent_errors(episode):
-                    logger.warning("skip_episode_due_to_agent_error idx={} item_id={}", sample_idx, item_id)
+                    # Track failed episode
+                    for step in episode.get("executor_transitions", []):
+                        if not step.get("success", True) or step.get("error", "").strip():
+                            logger.warning("Episode {} agent error: role={} model={} error={}",
+                                sample_idx, step.get("role"), step.get("model"), step.get("error"))
+                    progress.update(success=False, models=None)
                     return
 
                 with process_lock:
@@ -346,6 +367,10 @@ def main(default_dataset: str = "mbpp") -> None:
                                 "strategy_name": step.get("strategy", ""),
                                 "latency_seconds": step.get("latency_seconds", 0.0),
                                 "budget_remaining": step.get("budget_remaining", 0.0),
+                                "round_index": step.get("round_index", 0),
+                                "dep_level": step.get("dep_level", 0),
+                                "spatial_predecessors": step.get("spatial_predecessors", ""),
+                                "spatial_successors": step.get("spatial_successors", ""),
                                 "observed_ttft": step.get("observed_ttft", 0.0),
                                 "observed_tpot": step.get("observed_tpot", 0.0),
                                 "llm_running": step.get("llm_running", 0),
@@ -354,6 +379,8 @@ def main(default_dataset: str = "mbpp") -> None:
                                 "llm_ttft_avg": step.get("llm_ttft_avg", 0.0),
                                 "llm_itl_avg": step.get("llm_itl_avg", 0.0),
                                 "llm_e2e_avg": step.get("llm_e2e_avg", 0.0),
+                                "llm_queue_avg": step.get("llm_queue_avg", 0.0),
+                                "llm_inference_avg": step.get("llm_inference_avg", 0.0),
                                 "prompt_base": step.get("prompt_base", ""),
                                 "response_final": step.get("response", ""),
                                 "prompt_tokens": token_counts.get("prompt_tokens", 0),
@@ -376,25 +403,9 @@ def main(default_dataset: str = "mbpp") -> None:
                         logger.info("Saved checkpoint: {}", saved_path)
                         last_checkpoint_episode = episode_counter
 
-                    if len(planner_transitions) <= args.log_episodes:
-                        logger.info(
-                            "episode={} topology={} role_set={} quality={:.3f} latency={:.3f}s budget={:.2f}s",
-                            len(planner_transitions) - 1,
-                            episode["topology"],
-                            episode["role_set"],
-                            episode["quality"],
-                            episode["workflow_latency_seconds"],
-                            episode["budget_total"],
-                        )
-                        for step in episode["executor_transitions"]:
-                            logger.info(
-                                "  role={} model={} strategy={} call_latency={:.3f}s budget_rem={:.2f}s",
-                                step["role"],
-                                step["model"],
-                                step["strategy"],
-                                step["latency_seconds"],
-                                step["budget_remaining"],
-                            )
+                    # Extract models used in this episode for statistics
+                    models_used = [step.get("model", "") for step in episode["executor_transitions"] if step.get("model")]
+                    progress.update(success=True, models=models_used)
 
             if use_shooter:
                 pattern = RequestPattern(
@@ -427,11 +438,11 @@ def main(default_dataset: str = "mbpp") -> None:
 
                 def _handle_result(res: RequestResult) -> None:
                     if not res.success:
-                        logger.warning("request_failed idx={} item_id={} error={}", res.index, res.item_id, res.error)
+                        progress.update(success=False, models=None)
                         return
                     sample = data[res.index]
                     if res.output is None:
-                        logger.warning("request_empty_output idx={} item_id={}", res.index, res.item_id)
+                        progress.update(success=False, models=None)
                         return
                     process_episode(res.index, sample, res.output)
 
@@ -454,14 +465,13 @@ def main(default_dataset: str = "mbpp") -> None:
                             sample=sample,
                         )
                     except Exception as exc:
-                        logger.warning(
-                            "request_failed idx={} item_id={} error={}",
-                            sample_idx,
-                            sample.item_id,
-                            exc,
-                        )
+                        logger.warning("Episode {} failed: {}", sample_idx, exc)
+                        progress.update(success=False, models=None)
                         continue
                     process_episode(sample_idx, sample, episode)
+
+            # Log final progress summary for this epoch
+            progress.log_final_summary()
 
             metrics = trainer.train_batch(planner_transitions, executor_transitions)
             avg_quality = sum(t["quality"] for t in planner_transitions) / max(len(planner_transitions), 1)

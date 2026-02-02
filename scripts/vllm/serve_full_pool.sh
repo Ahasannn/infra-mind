@@ -9,19 +9,41 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # ==============================================================================
 # STORAGE CONFIGURATION
 # ==============================================================================
-# 1. HUGE FILES (Model Weights) -> BIG STORAGE
-# We keep this in /blue because these files are 100GB+ and will fill your home dir instantly.
+# All caches go to blue disk to avoid permission issues on /scratch/local
 STORAGE_ROOT="/blue/qi855292.ucf/ji757406.ucf"
+
+# 1. Model weights cache
 export HF_HOME="${STORAGE_ROOT}/huggingface_cache"
 mkdir -p "${HF_HOME}"
 
-# 2. LOGS -> LOCAL PROJECT FOLDER
-# We put this back in your project folder as requested.
+# 2. PyTorch / Triton / TorchInductor caches (fixes PermissionError on /scratch/local)
+export TORCH_HOME="${STORAGE_ROOT}/torch_cache"
+export TRITON_CACHE_DIR="${STORAGE_ROOT}/triton_cache"
+export TRITON_HOME="${STORAGE_ROOT}/triton_cache"
+export TORCHINDUCTOR_CACHE_DIR="${STORAGE_ROOT}/torchinductor_cache"
+
+# 3. Critical: Override TMPDIR to prevent writes to /scratch/local (Triton autotune uses this)
+export TMPDIR="${STORAGE_ROOT}/tmp"
+export TEMP="${STORAGE_ROOT}/tmp"
+export TMP="${STORAGE_ROOT}/tmp"
+
+# 4. General cache locations
+export XDG_CACHE_HOME="${STORAGE_ROOT}/cache"
+export TORCH_EXTENSIONS_DIR="${STORAGE_ROOT}/torch_extensions"
+
+mkdir -p "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" \
+         "${TMPDIR}" "${XDG_CACHE_HOME}" "${TORCH_EXTENSIONS_DIR}"
+
+# 5. LOGS -> LOCAL PROJECT FOLDER
 LOG_DIR="${ROOT_DIR}/logs/vllm"
 mkdir -p "${LOG_DIR}"
 
-echo "[Setup] HF Cache (Weights): ${HF_HOME}"
-echo "[Setup] Logs (Text):        ${LOG_DIR}"
+echo "[Setup] HF Cache (Weights):      ${HF_HOME}"
+echo "[Setup] Torch Cache:             ${TORCH_HOME}"
+echo "[Setup] Triton Cache:            ${TRITON_CACHE_DIR}"
+echo "[Setup] TorchInductor Cache:     ${TORCHINDUCTOR_CACHE_DIR}"
+echo "[Setup] TMPDIR:                  ${TMPDIR}"
+echo "[Setup] Logs (Text):             ${LOG_DIR}"
 # ==============================================================================
 
 # ==============================================================================
@@ -219,6 +241,7 @@ start_server_from_json() {
   fi
 
   # Note: HF_HOME environment variable handles the model weight location automatically here
+  # --no-enable-prefix-caching: Disable prefix caching to reduce memory overhead
   CUDA_VISIBLE_DEVICES="${gpu_device}" nohup "${VLLM_ENTRYPOINT[@]}" \
     --host "${VLLM_HOST}" \
     --port "${port}" \
@@ -228,6 +251,7 @@ start_server_from_json() {
     --gpu-memory-utilization "${gpu_memory_utilization}" \
     --max-model-len "${max_model_len}" \
     --tensor-parallel-size "${tensor_parallel_size}" \
+    --no-enable-prefix-caching \
     "${extra_flags[@]}" \
     >"${logfile}" 2>&1 &
 
