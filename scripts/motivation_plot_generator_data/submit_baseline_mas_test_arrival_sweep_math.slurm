@@ -20,7 +20,7 @@ echo "========================================="
 echo ""
 
 # Repository root
-REPO_ROOT="/home/ji757406.ucf/ahasan/system-aware-mas"
+REPO_ROOT="/home/ah872032.ucf/system-aware-mas"
 cd "$REPO_ROOT" || exit 1
 
 # Activate virtual environment
