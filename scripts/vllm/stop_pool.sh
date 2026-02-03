@@ -26,7 +26,9 @@ stop_server() {
   rm -f "${pidfile}"
 }
 
-stop_server "qwen_3b"
-stop_server "llama_3b"
-stop_server "mistral_7b"
+stop_server "deepseek_r1_distill_qwen_32b_"
+stop_server "mistral_small_24b_instruct_2501_"
+stop_server "qwen2_5_coder_14b_instruct_"
+stop_server "llama_3_1_8b_instruct_"
+stop_server "llama_3_2_3b_instruct_"
 
