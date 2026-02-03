@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "system-aware-mas"
 version = "0.0.0"
@@ -36,7 +40,7 @@ dependencies = [
   "shortuuid>=1.0",
   "tenacity>=8.0",
   "tiktoken>=0.7",
-  "torch>=2.5.0",
+  "torch>=2.6.0",
   "transformers>=4.43",
   "wikipedia>=1.4",
   "xlrd>=2.0",
@@ -53,3 +57,7 @@ dev = [
   "ruff>=0.5",
   "shellcheck-py>=0.10",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["MAR*"]

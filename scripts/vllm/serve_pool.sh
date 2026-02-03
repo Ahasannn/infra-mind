@@ -9,7 +9,7 @@ mkdir -p "${LOG_DIR}"
 # STORAGE CONFIGURATION
 # ==============================================================================
 # All caches go to blue disk to avoid permission issues on /scratch/local
-STORAGE_ROOT="/blue/qi855292.ucf/ji757406.ucf"
+STORAGE_ROOT="/blue/qi855292.ucf/ah872032.ucf"
 
 # Model weights cache
 export HF_HOME="${STORAGE_ROOT}/huggingface_cache"

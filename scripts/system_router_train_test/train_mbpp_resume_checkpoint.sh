@@ -2,7 +2,7 @@
 # System Router Training Script for MBPP Dataset
 
 # Blue storage configuration
-BLUE_STORAGE="/blue/qi855292.ucf/ji757406.ucf"
+BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
 
 # Checkpoint directory
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/system_router_full"

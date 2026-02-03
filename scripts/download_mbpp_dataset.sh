@@ -2,7 +2,7 @@
 # Download MBPP dataset to blue storage for offline use
 
 # Blue storage configuration
-BLUE_STORAGE="${BLUE_STORAGE:-/blue/qi855292.ucf/ji757406.ucf}"
+BLUE_STORAGE="${BLUE_STORAGE:-/blue/qi855292.ucf/ah872032.ucf}"
 DATASET_PATH="${BLUE_STORAGE}/datasets/mbpp/full"
 
 echo "[MBPP Download] Starting download to blue storage..."

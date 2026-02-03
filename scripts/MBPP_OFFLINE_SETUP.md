@@ -12,12 +12,12 @@ bash scripts/download_mbpp_dataset.sh
 
 This will:
 - Download all MBPP splits (train, test, validation, prompt) from HuggingFace
-- Save them to `/blue/qi855292.ucf/ji757406.ucf/datasets/mbpp/full/`
+- Save them to `/blue/qi855292.ucf/ah872032.ucf/datasets/mbpp/full/`
 - Create parquet files that can be loaded without internet access
 
 **Expected output:**
 ```
-[MBPP Download] Target directory: /blue/qi855292.ucf/ji757406.ucf/datasets/mbpp/full
+[MBPP Download] Target directory: /blue/qi855292.ucf/ah872032.ucf/datasets/mbpp/full
 [MBPP Download] Downloading train from HuggingFace...
 [MBPP Download] train: 374 examples saved
 [MBPP Download] Downloading test from HuggingFace...
@@ -45,7 +45,7 @@ bash scripts/mas_test_mbpp.sh
 
 Both scripts automatically set:
 ```bash
-export MBPP_DATASET_PATH="/blue/qi855292.ucf/ji757406.ucf/datasets/mbpp/full"
+export MBPP_DATASET_PATH="/blue/qi855292.ucf/ah872032.ucf/datasets/mbpp/full"
 ```
 
 ## How It Works
@@ -72,7 +72,7 @@ The `MbppDataset` class in `Datasets/mbpp_dataset.py` checks for the `MBPP_DATAS
 ## Storage Location
 
 ```
-/blue/qi855292.ucf/ji757406.ucf/
+/blue/qi855292.ucf/ah872032.ucf/
 ├── datasets/
 │   └── mbpp/
 │       └── full/
@@ -101,5 +101,5 @@ If you see `[MBPP Dataset] Loading from HuggingFace (online)`, the environment v
 
 **Solution**: Ensure your script sets:
 ```bash
-export MBPP_DATASET_PATH="/blue/qi855292.ucf/ji757406.ucf/datasets/mbpp/full"
+export MBPP_DATASET_PATH="/blue/qi855292.ucf/ah872032.ucf/datasets/mbpp/full"
 ```
