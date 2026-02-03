@@ -69,7 +69,7 @@ The script requests:
 - Individual log files per server in `logs/vllm/`
 
 ### 3. Checkpointing
-- Auto-saves every 10 batches to `/blue/qi855292.ucf/ji757406.ucf/checkpoints/mas_router/mas_math_train_full.pth`
+- Auto-saves every 10 batches to `/blue/qi855292.ucf/ah872032.ucf/checkpoints/mas_router/mas_math_train_full.pth`
 - Auto-resumes from checkpoint if exists
 - Uses atomic writes (tmp file + rename) to prevent corruption
 
@@ -185,7 +185,7 @@ curl http://localhost:8002/health
 
 ## Training Progress Files
 
-- **Checkpoint**: `/blue/qi855292.ucf/ji757406.ucf/checkpoints/mas_router/mas_math_train_full.pth`
+- **Checkpoint**: `/blue/qi855292.ucf/ah872032.ucf/checkpoints/mas_router/mas_math_train_full.pth`
 - **Telemetry**: `logs/baseline_mas_training/math/mas_train_math_full_last.csv`
 - **SLURM Output**: `logs/baseline_mas_training/math/slurm-<JOB_ID>.out`
 - **SLURM Errors**: `logs/baseline_mas_training/math/slurm-<JOB_ID>.err`

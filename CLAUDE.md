@@ -39,7 +39,7 @@ Key flags for `run_*.py`:
 - `--checkpoint PATH`: Load a router checkpoint
 - `--save-checkpoint PATH`: Save training checkpoint
 - `--train-telemetry-csv`, `--test-telemetry-csv`: Output telemetry
-- `--arrival-rate RATE`: Request arrival rate for load testing
+- `--arrival-rate RATE`: Request arrival rate for load testing (requests per minute)
 
 ### System-Aware Router Training (CMDP-based)
 ```bash

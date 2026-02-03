@@ -3,7 +3,7 @@
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Blue storage configuration
-BLUE_STORAGE="/blue/qi855292.ucf/ji757406.ucf"
+BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
 
 # Checkpoint directory
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"

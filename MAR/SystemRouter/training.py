@@ -176,7 +176,7 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
     parser.add_argument("--deterministic", action="store_true", help="Use argmax actions instead of sampling.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--log-episodes", type=int, default=1, help="Episodes to log per epoch.")
-    parser.add_argument("--arrival-rate", type=float, default=0.0, help="Arrival rate (req/sec). 0 disables shooting.")
+    parser.add_argument("--arrival-rate", type=float, default=0.0, help="Arrival rate (req/min). 0 disables shooting.")
     parser.add_argument("--arrival-rates", type=str, default="", help="Comma-separated arrival rates to sweep.")
     parser.add_argument(
         "--arrival-pattern",

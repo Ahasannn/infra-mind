@@ -10,11 +10,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # STORAGE CONFIGURATION
 # ==============================================================================
 # All caches go to blue disk to avoid permission issues on /scratch/local
-STORAGE_ROOT="/blue/qi855292.ucf/ji757406.ucf"
+STORAGE_ROOT="/blue/qi855292.ucf/ah872032.ucf"
 
 # 1. Model weights cache
 export HF_HOME="${STORAGE_ROOT}/huggingface_cache"
 mkdir -p "${HF_HOME}"
+
+# Export HF token from login node credential (huggingface-cli login)
+export HF_TOKEN=$(cat ~/.cache/huggingface/token 2>/dev/null || cat ~/.huggingface/token 2>/dev/null || echo "")
 
 # 2. PyTorch / Triton / TorchInductor caches (fixes PermissionError on /scratch/local)
 export TORCH_HOME="${STORAGE_ROOT}/torch_cache"

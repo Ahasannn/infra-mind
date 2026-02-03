@@ -42,8 +42,8 @@ mkdir -p logs
 
 # Fix PyTorch cache directory permissions issue
 # Use job-specific scratch directory or blue storage for caches
-export TORCHINDUCTOR_CACHE_DIR="/blue/qi855292.ucf/ji757406.ucf/torch_cache/${SLURM_JOB_ID}"
-export TRITON_CACHE_DIR="/blue/qi855292.ucf/ji757406.ucf/triton_cache/${SLURM_JOB_ID}"
+export TORCHINDUCTOR_CACHE_DIR="/blue/qi855292.ucf/ah872032.ucf/torch_cache/${SLURM_JOB_ID}"
+export TRITON_CACHE_DIR="/blue/qi855292.ucf/ah872032.ucf/triton_cache/${SLURM_JOB_ID}"
 mkdir -p "${TORCHINDUCTOR_CACHE_DIR}"
 mkdir -p "${TRITON_CACHE_DIR}"
 echo "[$(date)] PyTorch cache: ${TORCHINDUCTOR_CACHE_DIR}"
@@ -124,7 +124,7 @@ echo "============================================"
 echo ""
 
 # Export environment variables needed by training script
-export BLUE_STORAGE="/blue/qi855292.ucf/ji757406.ucf"
+export BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
 export MBPP_DATASET_PATH="${BLUE_STORAGE}/datasets/mbpp/full"
 export KEY="EMPTY"
 export PYTHONDONTWRITEBYTECODE=1

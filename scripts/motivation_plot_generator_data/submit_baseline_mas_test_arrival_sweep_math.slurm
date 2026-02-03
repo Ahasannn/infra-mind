@@ -5,8 +5,8 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=02:00:00
-#SBATCH --mem=64G
+#SBATCH --time=01:00:00
+#SBATCH --mem=32G
 #SBATCH --cpus-per-task=16
 #SBATCH --ntasks=1
 
@@ -35,7 +35,7 @@ export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
 
 # Blue storage configuration
-BLUE_STORAGE="/blue/qi855292.ucf/ji757406.ucf"
+BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
 export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
 
 # Ensure log directory exists
@@ -100,7 +100,7 @@ echo "========================================="
 echo ""
 
 set +e  # Don't exit on error, we want cleanup to run
-bash scripts/motivation_plot_generator_data/baseline_mas_test_arrival_sweep_math.sh
+bash scripts/motivation_plot_generator_data/baseline_mas_test_arrival_sweep_math_sustained.sh
 SWEEP_EXIT_CODE=$?
 set -e
 

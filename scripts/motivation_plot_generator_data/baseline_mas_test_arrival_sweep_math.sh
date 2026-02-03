@@ -3,7 +3,7 @@
 # This script loops through arrival rate and concurrency pairs and saves results to a single CSV
 
 # Blue storage configuration
-BLUE_STORAGE="/blue/qi855292.ucf/ji757406.ucf"
+BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
 
 # Checkpoint directory
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"

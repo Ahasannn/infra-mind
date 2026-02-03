@@ -155,7 +155,7 @@ def parse_args():
     parser.add_argument('--cost_rate', type=float, default=400.0)
     parser.add_argument('--max_agent', type=int, default=5)
     parser.add_argument("--request-timeout", type=float, default=600.0, help="Per-request timeout in seconds.")
-    parser.add_argument("--arrival-rate", type=float, nargs='+', default=[0.0], help="Arrival rate(s) (req/sec) for test shooting. Provide multiple values to sweep.")
+    parser.add_argument("--arrival-rate", type=float, nargs='+', default=[0.0], help="Arrival rate(s) (req/min) for test shooting. Provide multiple values to sweep.")
     parser.add_argument("--arrival-pattern", type=str, default="poisson", help="Arrival pattern for test shooting.")
     parser.add_argument("--concurrency", type=int, default=1, help="Max concurrent in-flight requests in test shooting.")
     parser.add_argument("--burst-duration", type=float, default=3.0, help="Burst duration for microburst.")

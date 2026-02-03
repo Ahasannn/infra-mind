@@ -17,7 +17,7 @@ class RequestPattern:
         """
         Args:
             pattern: {"poisson", "microburst", "sustained"}
-            rate: base arrival rate (req/sec)
+            rate: base arrival rate (req/min)
             spike_intensity: multiplier during microburst
             spike_period: seconds between microbursts
             burst_duration: seconds of burst inside each period
@@ -48,4 +48,5 @@ class RequestPattern:
             rate = self.rate
 
         rate = max(rate, 1e-6)
-        return float(self._rng.exponential(1.0 / rate))
+        # Convert rate from req/min to req/sec for inter-arrival time calculation
+        return float(self._rng.exponential(60.0 / rate))
