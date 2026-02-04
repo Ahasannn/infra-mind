@@ -1,6 +1,6 @@
 #!/bin/bash
-# Baseline MAS Test Arrival Rate Sweep for MATH
-# This script loops through arrival rate and concurrency pairs and saves results to a single CSV
+# Baseline MAS Test Arrival Rate Sweep for MBPP (Sustained High Load)
+# This script tests with sustained arrival pattern at high request rate
 
 # Blue storage configuration
 BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
@@ -9,16 +9,18 @@ BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"
 
 # Dataset directory (offline)
-export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
+export MBPP_DATASET_PATH="${BLUE_STORAGE}/datasets/mbpp/full"
 
 # Output CSV file
-OUTPUT_CSV="logs/motivation_plot_generator_data/baseline_motivation_sweep_math_test_temp.csv"
+OUTPUT_CSV="logs/motivation_plot_generator_data/baseline_motivation_sweep_mbpp_test_300_poisson.csv"
 
 # Arrival patterns, rates, and concurrency tuples: (pattern, arrival_rate, concurrency)
-# Using same rates as MBPP for consistency in motivation plots
 RUN_CONFIGS=(
-    "sustained 2 1000"
-    "sustained 20 1000"
+    "poisson 2 1000"
+    "poisson 5 1000"
+    "poisson 100 1000"
+    "poisson 200 1000"
+    "poisson 300 1000"
 )
 
 # Loop through each configuration
@@ -29,15 +31,14 @@ for pair in "${RUN_CONFIGS[@]}"; do
     echo "Running with arrival_rate=$arrival_rate, concurrency=$concurrency, pattern=$pattern"
     echo "========================================"
 
-    python Experiments/run_math.py \
+    python Experiments/run_mbpp.py \
         --concurrency "$concurrency" \
         --arrival-rate "$arrival_rate" \
         --arrival-pattern "$pattern" \
-        --checkpoint "${CHECKPOINT_DIR}/mas_math_train_full.pth" \
+        --checkpoint "${CHECKPOINT_DIR}/mas_mbpp_train_full.pth" \
         --test-telemetry-csv "$OUTPUT_CSV" \
         --epochs 0 \
-        --batch_size 1 \
-        --test_limit 1000
+        --test_limit 300
 
     echo "Completed run with arrival_rate=$arrival_rate, concurrency=$concurrency, pattern=$pattern"
     echo ""

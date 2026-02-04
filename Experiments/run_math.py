@@ -209,9 +209,6 @@ if __name__ == '__main__':
             "Download and extract the dataset there, or pass --dataset-root."
         )
 
-    train_dataset = load_math_dataset(dataset_root, split="train")
-    test_dataset = load_math_dataset(dataset_root, split="test")
-
     # Backwards compatible: `--limit` applies to both unless overridden.
     if args.limit and args.limit > 0:
         if not args.train_limit:
@@ -219,10 +216,12 @@ if __name__ == '__main__':
         if not args.test_limit:
             args.test_limit = args.limit
 
-    if args.train_limit and args.train_limit > 0:
-        train_dataset = train_dataset[:args.train_limit]
-    if args.test_limit and args.test_limit > 0:
-        test_dataset = test_dataset[:args.test_limit]
+    # Load datasets with stratified sampling if limits are specified
+    train_stratified = args.train_limit if args.train_limit > 0 else 0
+    test_stratified = args.test_limit if args.test_limit > 0 else 0
+
+    train_dataset = load_math_dataset(dataset_root, split="train", stratified_limit=train_stratified)
+    test_dataset = load_math_dataset(dataset_root, split="test", stratified_limit=test_stratified)
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     log_file = f"MATH_{current_time}.txt"

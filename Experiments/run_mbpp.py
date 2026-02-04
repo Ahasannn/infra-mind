@@ -196,9 +196,6 @@ if __name__ == '__main__':
     reset_vllm_logs()
     args = parse_args()
     fix_random_seed(1234)
-    train_dataset = MbppDataset('train')
-    test_dataset = MbppDataset('test')
-
     # Backwards compatible: `--limit` applies to both unless overridden.
     if args.limit and args.limit > 0:
         if not args.train_limit:
@@ -206,10 +203,12 @@ if __name__ == '__main__':
         if not args.test_limit:
             args.test_limit = args.limit
 
-    if args.train_limit and args.train_limit > 0:
-        train_dataset.df = train_dataset.df.iloc[: args.train_limit].reset_index(drop=True)
-    if args.test_limit and args.test_limit > 0:
-        test_dataset.df = test_dataset.df.iloc[: args.test_limit].reset_index(drop=True)
+    # Pass limits directly to dataset constructors
+    train_limit = args.train_limit if args.train_limit and args.train_limit > 0 else 0
+    test_limit = args.test_limit if args.test_limit and args.test_limit > 0 else 0
+
+    train_dataset = MbppDataset('train', limit=train_limit)
+    test_dataset = MbppDataset('test', limit=test_limit)
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     log_file = f"mbpp_{current_time}.txt"

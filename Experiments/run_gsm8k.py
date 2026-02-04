@@ -204,9 +204,6 @@ if __name__ == '__main__':
     hf_train = load_dataset("openai/gsm8k", "main", split="train")
     hf_test = load_dataset("openai/gsm8k", "main", split="test")
 
-    train_dataset = gsm_data_process(hf_train)
-    test_dataset = gsm_data_process(hf_test)
-
     # Backwards compatible: `--limit` applies to both unless overridden.
     if args.limit and args.limit > 0:
         if not args.train_limit:
@@ -214,10 +211,12 @@ if __name__ == '__main__':
         if not args.test_limit:
             args.test_limit = args.limit
 
-    if args.train_limit and args.train_limit > 0:
-        train_dataset = train_dataset[:args.train_limit]
-    if args.test_limit and args.test_limit > 0:
-        test_dataset = test_dataset[:args.test_limit]
+    # Pass limits directly to gsm_data_process
+    train_limit = args.train_limit if args.train_limit and args.train_limit > 0 else 0
+    test_limit = args.test_limit if args.test_limit and args.test_limit > 0 else 0
+
+    train_dataset = gsm_data_process(hf_train, limit=train_limit)
+    test_dataset = gsm_data_process(hf_test, limit=test_limit)
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     log_file = f"gsm8k_{current_time}.txt"

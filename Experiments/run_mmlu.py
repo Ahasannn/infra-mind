@@ -195,10 +195,6 @@ if __name__ == '__main__':
     args = parse_args()
     fix_random_seed(1234)
 
-    # download()
-    dataset_train = MMLUDataset('dev')
-    dataset_test = MMLUDataset('test')
-
     # Apply limits
     if args.limit and args.limit > 0:
         if not args.train_limit:
@@ -206,7 +202,13 @@ if __name__ == '__main__':
         if not args.test_limit:
             args.test_limit = args.limit
 
-    # Note: MMLUDataset uses pandas DataFrame internally, so we limit via train_batch/test_batch
+    # Pass stratified_limit directly to dataset constructors
+    train_limit = args.train_limit if args.train_limit and args.train_limit > 0 else 0
+    test_limit = args.test_limit if args.test_limit and args.test_limit > 0 else 0
+
+    # download()
+    dataset_train = MMLUDataset('dev', stratified_limit=train_limit)
+    dataset_test = MMLUDataset('test', stratified_limit=test_limit)
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     log_file = f"mmlu_{current_time}.txt"

@@ -1,6 +1,16 @@
 import re
 
-def gsm_data_process(dataset):
+def gsm_data_process(dataset, limit: int = 0):
+    """
+    Process GSM8K dataset.
+
+    Args:
+        dataset: HuggingFace dataset object
+        limit: If > 0, limit to this many items (deterministic)
+
+    Returns:
+        List of processed data items
+    """
     # extract the question, step and answer
     list_data_dict = []
     for data in dataset:
@@ -10,6 +20,12 @@ def gsm_data_process(dataset):
         item["step"] = raw_answer_list[0].strip()
         item["answer"] = raw_answer_list[-1].replace(",", "").strip()
         list_data_dict.append(item)
+
+    # Apply deterministic limit if specified
+    if limit > 0:
+        print(f"[GSM8K Dataset] Applying limit: {limit} items (deterministic)")
+        list_data_dict = list_data_dict[:limit]
+        print(f"[GSM8K Dataset] Dataset size after limit: {len(list_data_dict)}")
 
     return list_data_dict
 
