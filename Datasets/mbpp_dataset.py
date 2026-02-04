@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 class MbppDataset:
-    def __init__(self, split: Union[Literal['train'], Literal['val'], Literal['test'], Literal['prompt']],):
+    def __init__(self, split: Union[Literal['train'], Literal['val'], Literal['test'], Literal['prompt']], limit: int = 0):
         self._splits = {
             'train': 'train-00000-of-00001.parquet',
             'test': 'test-00000-of-00001.parquet',
@@ -38,6 +38,12 @@ class MbppDataset:
 
         # self.df = self.df.sample(frac=0.2).reset_index(drop=True)
         self.df = process_data(self.df)
+
+        # Apply deterministic limit if specified
+        if limit > 0:
+            print(f"[MBPP Dataset] Applying limit: {limit} items (deterministic)")
+            self.df = self.df.iloc[:limit].reset_index(drop=True)
+            print(f"[MBPP Dataset] Dataset size after limit: {len(self.df)}")
 
     def __len__(self):
         return len(self.df)

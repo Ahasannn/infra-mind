@@ -4,7 +4,7 @@ from datasets import load_dataset
 
 
 class HumanEvalDataset:
-    def __init__(self, split: Union[Literal['train'], Literal['test']], split_ratio: float = 0.2, seed: int = 42):
+    def __init__(self, split: Union[Literal['train'], Literal['test']], split_ratio: float = 0.2, seed: int = 42, limit: int = 0):
         """
         HumanEval dataset loader that auto-downloads from Hugging Face.
 
@@ -12,6 +12,7 @@ class HumanEvalDataset:
             split: 'train' or 'test' split
             split_ratio: Ratio for train/test split (default 0.2 means 20% train, 80% test)
             seed: Random seed for reproducible splits
+            limit: If > 0, limit to this many items after split (deterministic)
         """
         # Load the full dataset from Hugging Face
         dataset = load_dataset('openai_humaneval', split='test')
@@ -31,6 +32,12 @@ class HumanEvalDataset:
             self.df = df.iloc[split_index:].reset_index(drop=True)
         else:
             raise ValueError(f"Invalid split: {split}. Must be 'train' or 'test'")
+
+        # Apply deterministic limit if specified
+        if limit > 0:
+            print(f"[HumanEval Dataset] Applying limit to {split}: {limit} items (deterministic)")
+            self.df = self.df.iloc[:limit].reset_index(drop=True)
+            print(f"[HumanEval Dataset] Dataset size after limit: {len(self.df)}")
 
     def __len__(self):
         return len(self.df)

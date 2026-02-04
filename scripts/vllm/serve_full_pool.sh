@@ -9,39 +9,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # ==============================================================================
 # STORAGE CONFIGURATION
 # ==============================================================================
-# All caches go to blue disk to avoid permission issues on /scratch/local
-STORAGE_ROOT="/blue/qi855292.ucf/ah872032.ucf"
+# Load centralized HPC environment configuration
+if [[ -f "${ROOT_DIR}/scripts/setup_hpc_env.sh" ]]; then
+    source "${ROOT_DIR}/scripts/setup_hpc_env.sh"
+else
+    echo "[ERROR] setup_hpc_env.sh not found at ${ROOT_DIR}/scripts/setup_hpc_env.sh"
+    exit 1
+fi
 
-# 1. Model weights cache
-export HF_HOME="${STORAGE_ROOT}/huggingface_cache"
-mkdir -p "${HF_HOME}"
-
-# Export HF token from login node credential (huggingface-cli login)
-export HF_TOKEN=$(cat ~/.cache/huggingface/token 2>/dev/null || cat ~/.huggingface/token 2>/dev/null || echo "")
-
-# 2. PyTorch / Triton / TorchInductor caches (fixes PermissionError on /scratch/local)
-export TORCH_HOME="${STORAGE_ROOT}/torch_cache"
-export TRITON_CACHE_DIR="${STORAGE_ROOT}/triton_cache"
-export TRITON_HOME="${STORAGE_ROOT}/triton_cache"
-export TORCHINDUCTOR_CACHE_DIR="${STORAGE_ROOT}/torchinductor_cache"
-
-# 3. Critical: Override TMPDIR to prevent writes to /scratch/local (Triton autotune uses this)
-export TMPDIR="${STORAGE_ROOT}/tmp"
-export TEMP="${STORAGE_ROOT}/tmp"
-export TMP="${STORAGE_ROOT}/tmp"
-
-# 4. General cache locations
-export XDG_CACHE_HOME="${STORAGE_ROOT}/cache"
-export TORCH_EXTENSIONS_DIR="${STORAGE_ROOT}/torch_extensions"
-
-mkdir -p "${TORCH_HOME}" "${TRITON_CACHE_DIR}" "${TORCHINDUCTOR_CACHE_DIR}" \
-         "${TMPDIR}" "${XDG_CACHE_HOME}" "${TORCH_EXTENSIONS_DIR}"
-
-# 5. LOGS -> LOCAL PROJECT FOLDER
+# LOGS -> LOCAL PROJECT FOLDER
 LOG_DIR="${ROOT_DIR}/logs/vllm"
 mkdir -p "${LOG_DIR}"
 
 echo "[Setup] HF Cache (Weights):      ${HF_HOME}"
+echo "[Setup] HF Token:                $(if [[ -n "${HF_TOKEN}" ]]; then echo "✓ Set"; else echo "✗ Not found"; fi)"
 echo "[Setup] Torch Cache:             ${TORCH_HOME}"
 echo "[Setup] Triton Cache:            ${TRITON_CACHE_DIR}"
 echo "[Setup] TorchInductor Cache:     ${TORCHINDUCTOR_CACHE_DIR}"

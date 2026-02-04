@@ -5,23 +5,81 @@ import json
 from typing import Union, List, Literal, Any, Dict
 import numpy as np
 
-def load_math_dataset(data_path: str, split: Union [Literal['train'], Literal['test'], Literal['sampled_train'], Literal['sampled_test']]='train') -> List[Dict[str, str]]:
+def load_math_dataset(data_path: str, split: Union [Literal['train'], Literal['test'], Literal['sampled_train'], Literal['sampled_test']]='train', stratified_limit: int = 0) -> List[Dict[str, str]]:
+    """
+    Load MATH dataset with optional stratified sampling.
+
+    Args:
+        data_path: Root path to MATH dataset
+        split: Dataset split to load
+        stratified_limit: If > 0, sample this many items proportionally from each category (deterministic)
+
+    Returns:
+        List of dataset items
+    """
     print("Loading Math dataset...")
     category_paths = glob.glob(os.path.join(data_path, split, "*"))
     category_paths = sorted(category_paths)
     print("Number of categories: ", len(category_paths))
-    total_data = []
-    for category_path in category_paths:
-        if os.path.isdir(category_path):  
-            json_files = glob.glob(os.path.join(category_path, "*.json"))
-            for json_file in json_files:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    total_data.append(data)
-    print("Total number of questions: ", len(total_data))
-    rng = np.random.default_rng(888)
-    shuffled_data = list(rng.permutation(total_data))
-    return shuffled_data
+
+    if stratified_limit > 0:
+        # Stratified sampling: take proportional samples from each category
+        print(f"Using stratified sampling to select {stratified_limit} items from all categories...")
+
+        # First pass: count items per category
+        category_data = {}
+        total_count = 0
+        for category_path in category_paths:
+            if os.path.isdir(category_path):
+                category_name = os.path.basename(category_path)
+                json_files = sorted(glob.glob(os.path.join(category_path, "*.json")))  # Sort for determinism
+                category_items = []
+                for json_file in json_files:
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        data['category'] = category_name  # Add category info
+                        category_items.append(data)
+                category_data[category_name] = category_items
+                total_count += len(category_items)
+                print(f"  {category_name}: {len(category_items)} items")
+
+        # Calculate proportional samples per category
+        sampled_data = []
+        remaining = stratified_limit
+        categories_sorted = sorted(category_data.keys())  # Deterministic order
+
+        for i, category_name in enumerate(categories_sorted):
+            category_items = category_data[category_name]
+            if i == len(categories_sorted) - 1:
+                # Last category: take all remaining to reach exactly stratified_limit
+                n_samples = remaining
+            else:
+                # Proportional sampling
+                n_samples = int(len(category_items) / total_count * stratified_limit)
+
+            # Take first n_samples items (deterministic)
+            n_samples = min(n_samples, len(category_items))
+            sampled_data.extend(category_items[:n_samples])
+            remaining -= n_samples
+            print(f"  Sampled {n_samples} from {category_name}")
+
+        print(f"Total sampled: {len(sampled_data)} items")
+        return sampled_data
+
+    else:
+        # Original behavior: load all and shuffle
+        total_data = []
+        for category_path in category_paths:
+            if os.path.isdir(category_path):
+                json_files = glob.glob(os.path.join(category_path, "*.json"))
+                for json_file in json_files:
+                    with open(json_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        total_data.append(data)
+        print("Total number of questions: ", len(total_data))
+        rng = np.random.default_rng(888)
+        shuffled_data = list(rng.permutation(total_data))
+        return shuffled_data
 
 
 '''

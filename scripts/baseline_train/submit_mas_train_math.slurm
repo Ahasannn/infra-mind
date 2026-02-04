@@ -5,9 +5,9 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=01:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=64G
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --ntasks=1
 
 # Print job info
@@ -23,6 +23,10 @@ echo ""
 REPO_ROOT="/home/ah872032.ucf/system-aware-mas"
 cd "$REPO_ROOT" || exit 1
 
+# Load centralized HPC environment configuration
+echo "Loading HPC environment configuration..."
+source scripts/setup_hpc_env.sh
+
 # Activate virtual environment
 echo "Activating virtual environment..."
 source .venv/bin/activate || exit 1
@@ -30,15 +34,18 @@ echo "Python: $(which python)"
 python --version
 echo ""
 
-# Blue storage configuration
-BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
+# Blue storage configuration (imported from setup_hpc_env.sh)
+echo "Blue Storage: ${BLUE_STORAGE}"
+echo "HF Cache: ${HF_HOME}"
+echo "HF Token: $(if [[ -n "${HF_TOKEN}" ]]; then echo "✓ Configured"; else echo "✗ Missing"; fi)"
+echo ""
 
 # Checkpoint and telemetry paths
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"
 mkdir -p "${CHECKPOINT_DIR}"
-CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_math_train_debug.pth"
+CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_math_train_full.pth"
 TELEMETRY_DIR="logs/baseline_mas_training/math"
-TELEMETRY_CSV="${TELEMETRY_DIR}/mas_train_math_debug.csv"
+TELEMETRY_CSV="${TELEMETRY_DIR}/mas_train_math_full.csv"
 mkdir -p logs "${TELEMETRY_DIR}"
 
 # Dataset configuration
@@ -108,15 +115,13 @@ echo ""
 # Build training command
 # Full dataset training (7500 examples, ~21 hours for 2 epochs)
 CMD="python Experiments/run_math.py \
-  --epochs 1 \
-  --batch_size 16 \
+  --epochs 2 \
+  --batch_size 32 \
   --lr 0.01 \
-  --train_limit 32 \
   --test_limit 16 \
   --cost_rate ${COST_RATE} \
   --dataset-root ${MATH_DATASET_ROOT} \
   --train-telemetry-csv ${TELEMETRY_CSV} \
-  --start-batch 130 \
   --save-checkpoint ${CHECKPOINT_PATH}"
 
 # Add checkpoint resumption if exists

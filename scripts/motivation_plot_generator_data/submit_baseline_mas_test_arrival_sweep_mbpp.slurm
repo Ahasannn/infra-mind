@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=mas_sweep_math
-#SBATCH --output=logs/motivation_plot_generator_data/slurm-%j.out
-#SBATCH --error=logs/motivation_plot_generator_data/slurm-%j.err
+#SBATCH --job-name=mas_sweep_mbpp
+#SBATCH --output=logs/motivation_plot_generator_data/mbpp/slurm-%j.out
+#SBATCH --error=logs/motivation_plot_generator_data/mbpp/slurm-%j.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
@@ -36,10 +36,10 @@ export TOKENIZERS_PARALLELISM="false"
 
 # Blue storage configuration
 BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
-export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
+export MBPP_DATASET_PATH="${BLUE_STORAGE}/datasets/mbpp/full"
 
 # Ensure log directory exists
-mkdir -p logs/motivation_plot_generator_data
+mkdir -p logs/motivation_plot_generator_data/mbpp
 
 # Function to cleanup vLLM servers on exit
 cleanup_vllm() {
@@ -95,12 +95,12 @@ echo ""
 
 # Run the arrival rate sweep
 echo "========================================="
-echo "Starting MATH arrival rate sweep..."
+echo "Starting MBPP arrival rate sweep..."
 echo "========================================="
 echo ""
 
 set +e  # Don't exit on error, we want cleanup to run
-bash scripts/motivation_plot_generator_data/baseline_mas_test_arrival_sweep_math_sustained.sh
+bash scripts/motivation_plot_generator_data/baseline_mas_test_arrival_sweep_mbpp_sustained.sh
 SWEEP_EXIT_CODE=$?
 set -e
 

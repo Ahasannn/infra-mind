@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=mas_sweep_math
-#SBATCH --output=logs/motivation_plot_generator_data/slurm-%j.out
-#SBATCH --error=logs/motivation_plot_generator_data/slurm-%j.err
+#SBATCH --job-name=mas_train_gsm8k
+#SBATCH --output=logs/baseline_mas_training/gsm8k/slurm-%j.out
+#SBATCH --error=logs/baseline_mas_training/gsm8k/slurm-%j.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=03:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --ntasks=1
@@ -23,6 +23,10 @@ echo ""
 REPO_ROOT="/home/ah872032.ucf/system-aware-mas"
 cd "$REPO_ROOT" || exit 1
 
+# Load centralized HPC environment configuration
+echo "Loading HPC environment configuration..."
+source scripts/setup_hpc_env.sh
+
 # Activate virtual environment
 echo "Activating virtual environment..."
 source .venv/bin/activate || exit 1
@@ -30,16 +34,25 @@ echo "Python: $(which python)"
 python --version
 echo ""
 
-# Set environment variables
+# Blue storage configuration (imported from setup_hpc_env.sh)
+echo "Blue Storage: ${BLUE_STORAGE}"
+echo "HF Cache: ${HF_HOME}"
+echo "HF Token: $(if [[ -n "${HF_TOKEN}" ]]; then echo "✓ Configured"; else echo "✗ Missing"; fi)"
+echo ""
+
+# Checkpoint and telemetry paths
+CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"
+mkdir -p "${CHECKPOINT_DIR}"
+CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_gsm8k_train_full.pth"
+TELEMETRY_DIR="logs/baseline_mas_training/gsm8k"
+TELEMETRY_CSV="${TELEMETRY_DIR}/mas_train_gsm8k_full.csv"
+mkdir -p logs "${TELEMETRY_DIR}"
+
+# Dataset configuration - GSM8K uses --dataset-path (not --dataset-root)
+# Will download from HuggingFace directly
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
-
-# Blue storage configuration
-BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
-export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
-
-# Ensure log directory exists
-mkdir -p logs/motivation_plot_generator_data
+COST_RATE="${COST_RATE:-100.0}"
 
 # Function to cleanup vLLM servers on exit
 cleanup_vllm() {
@@ -73,7 +86,7 @@ cleanup_vllm() {
 # Register cleanup on script exit
 trap cleanup_vllm EXIT INT TERM
 
-# Start vLLM model pool
+# Start vLLM model pool using existing script
 echo "========================================="
 echo "Starting vLLM model pool..."
 echo "========================================="
@@ -93,22 +106,44 @@ echo ""
 bash scripts/check_vllm_status.sh
 echo ""
 
-# Run the arrival rate sweep
+# Build training command
+# Note: GSM8K uses --dataset-path argument (different from MATH/MMLU)
+CMD="python Experiments/run_gsm8k.py \
+  --epochs 2 \
+  --batch_size 32 \
+  --lr 0.01 \
+  --test_limit 16 \
+  --cost_rate ${COST_RATE} \
+  --train-telemetry-csv ${TELEMETRY_CSV} \
+  --save-checkpoint ${CHECKPOINT_PATH}"
+
+# Add checkpoint resumption if exists
+if [ -f "${CHECKPOINT_PATH}" ]; then
+    echo "Found existing checkpoint: ${CHECKPOINT_PATH}"
+    echo "Resuming training..."
+    CMD="${CMD} --checkpoint ${CHECKPOINT_PATH}"
+else
+    echo "No existing checkpoint found. Starting fresh training..."
+fi
+
+# Run training
 echo "========================================="
-echo "Starting MATH arrival rate sweep..."
+echo "Starting training..."
 echo "========================================="
+echo "Command: $CMD"
 echo ""
 
+# Run with proper error handling
 set +e  # Don't exit on error, we want cleanup to run
-bash scripts/motivation_plot_generator_data/baseline_mas_test_arrival_sweep_math_sustained.sh
-SWEEP_EXIT_CODE=$?
+$CMD
+TRAIN_EXIT_CODE=$?
 set -e
 
 echo ""
 echo "========================================="
-echo "Sweep completed with exit code: $SWEEP_EXIT_CODE"
+echo "Training completed with exit code: $TRAIN_EXIT_CODE"
 echo "End Time: $(date)"
 echo "========================================="
 
 # Cleanup will happen automatically via trap
-exit $SWEEP_EXIT_CODE
+exit $TRAIN_EXIT_CODE
