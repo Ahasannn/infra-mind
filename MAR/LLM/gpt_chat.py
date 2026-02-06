@@ -42,7 +42,20 @@ def _get_shared_sync_client(*, base_url: Optional[str], api_key: str) -> OpenAI:
     with _SYNC_CLIENT_LOCK:
         client = _SYNC_CLIENTS.get(key)
         if client is None:
-            client = OpenAI(base_url=base_url, api_key=api_key)
+            # Increase connection pool limits for high-concurrency load testing
+            # Default httpx limits: max_connections=100, max_keepalive_connections=20
+            # For motivation plots with high arrival rates, we need much higher limits
+            if httpx is not None:
+                http_client = httpx.Client(
+                    limits=httpx.Limits(
+                        max_connections=2000,  # Total connection pool size
+                        max_keepalive_connections=1000,  # Reusable connections
+                    ),
+                    timeout=httpx.Timeout(1800.0, connect=60.0),  # 30 min timeout for high-load queue wait
+                )
+                client = OpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
+            else:
+                client = OpenAI(base_url=base_url, api_key=api_key)
             _SYNC_CLIENTS[key] = client
     return client
 
@@ -187,11 +200,11 @@ def _resolve_base_url(model_name: str) -> Optional[str]:
 def _default_request_timeout() -> Optional[float]:
     raw = os.environ.get("LLM_REQUEST_TIMEOUT", "").strip()
     if not raw:
-        return 120.0
+        return 1800.0  # 30 minutes default for high-load queue scenarios
     try:
         timeout = float(raw)
     except ValueError:
-        return 120.0
+        return 1800.0
     if timeout <= 0:
         return None
     return timeout
@@ -224,6 +237,15 @@ def _is_timeout_error(exc: BaseException) -> bool:
     return "timeout" in message or "timed out" in message
 
 
+def _is_non_retryable_server_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    for pattern in ("cuda error", "cuda out of memory", "cublas_status_alloc_failed",
+                    "torch.cuda.outofmemoryerror", "enginecore"):
+        if pattern in msg:
+            return True
+    return False
+
+
 @LLMRegistry.register('ALLChat')
 class ALLChat(LLM):
     def __init__(self, model_name: str):
@@ -231,7 +253,7 @@ class ALLChat(LLM):
     
     @retry(
         wait=wait_random_exponential(max=100),
-        stop=stop_after_attempt(10),
+        stop=stop_after_attempt(3),
         retry=retry_if_not_exception_type(_TIMEOUT_EXCEPTIONS),
     )
     def gen(
@@ -274,6 +296,8 @@ class ALLChat(LLM):
             print(f"[DEBUG] API Key set: {'Yes' if _resolve_api_key() else 'No'}")
             print(f"[DEBUG] Exception type: {type(exc).__name__}")
             print(f"[DEBUG] Exception message: {str(exc)}")
+            if _is_non_retryable_server_error(exc):
+                raise
             if _is_timeout_error(exc):
                 raise TimeoutError("LLM request timed out") from exc
             raise
@@ -345,7 +369,7 @@ class DSChat(LLM):
     
     @retry(
         wait=wait_random_exponential(max=100),
-        stop=stop_after_attempt(10),
+        stop=stop_after_attempt(3),
         retry=retry_if_not_exception_type(_TIMEOUT_EXCEPTIONS),
     )
     def gen(
@@ -386,6 +410,8 @@ class DSChat(LLM):
             print(f"[DEBUG] API Key set: {'Yes' if _resolve_api_key() else 'No'}")
             print(f"[DEBUG] Exception type: {type(exc).__name__}")
             print(f"[DEBUG] Exception message: {str(exc)}")
+            if _is_non_retryable_server_error(exc):
+                raise
             if _is_timeout_error(exc):
                 raise TimeoutError("LLM request timed out") from exc
             raise

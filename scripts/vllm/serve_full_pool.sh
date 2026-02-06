@@ -226,7 +226,10 @@ start_server_from_json() {
 
   # Note: HF_HOME environment variable handles the model weight location automatically here
   # --no-enable-prefix-caching: Disable prefix caching to reduce memory overhead
-  CUDA_VISIBLE_DEVICES="${gpu_device}" nohup "${VLLM_ENTRYPOINT[@]}" \
+  # VLLM_USE_V1=0: Force v0 engine for stability under high concurrent load
+  #   v1 engine (default in 0.14.0) crashes with EngineDeadError / AssertionError
+  #   in is_strictly_contiguous(decode_query) when batching many concurrent requests
+  VLLM_USE_V1=0 CUDA_VISIBLE_DEVICES="${gpu_device}" nohup "${VLLM_ENTRYPOINT[@]}" \
     --host "${VLLM_HOST}" \
     --port "${port}" \
     --model "${model_name}" \
@@ -236,6 +239,8 @@ start_server_from_json() {
     --max-model-len "${max_model_len}" \
     --tensor-parallel-size "${tensor_parallel_size}" \
     --no-enable-prefix-caching \
+    --max-num-seqs 32 \
+    --swap-space 8 \
     "${extra_flags[@]}" \
     >"${logfile}" 2>&1 &
 

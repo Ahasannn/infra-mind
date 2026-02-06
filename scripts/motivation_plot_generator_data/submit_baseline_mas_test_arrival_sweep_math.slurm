@@ -5,7 +5,7 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=03:00:00
+#SBATCH --time=09:30:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --ntasks=1
@@ -33,6 +33,10 @@ echo ""
 # Set environment variables
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
+
+# Code execution timeout (seconds) - tight limit to prevent infinite loops
+# Separate from LLM generation timeout (30 min) to protect against bad generated code
+export CODE_EXECUTION_TIMEOUT="10"  # 5 seconds for generated code execution
 
 # Blue storage configuration
 BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"

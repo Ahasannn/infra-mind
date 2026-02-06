@@ -14,7 +14,7 @@
       "vllm_config": {
         "port": 8001,
         "gpu_device": 0,
-        "gpu_memory_utilization": 0.45,
+        "gpu_memory_utilization": 0.40,
         "tensor_parallel_size": 1,
         "dtype": "bfloat16",
         "trust_remote_code": true,
@@ -29,7 +29,7 @@
       "vllm_config": {
         "port": 8002,
         "gpu_device": 1,
-        "gpu_memory_utilization": 0.35,
+        "gpu_memory_utilization": 0.30,
         "tensor_parallel_size": 1,
         "dtype": "bfloat16",
         "trust_remote_code": false,
@@ -44,7 +44,7 @@
       "vllm_config": {
         "port": 8003,
         "gpu_device": 0,
-        "gpu_memory_utilization": 0.25,
+        "gpu_memory_utilization": 0.20,
         "tensor_parallel_size": 1,
         "dtype": "bfloat16",
         "trust_remote_code": true,
@@ -59,7 +59,7 @@
       "vllm_config": {
         "port": 8004,
         "gpu_device": 1,
-        "gpu_memory_utilization": 0.15,
+        "gpu_memory_utilization": 0.12,
         "tensor_parallel_size": 1,
         "dtype": "bfloat16",
         "trust_remote_code": false,
@@ -74,7 +74,7 @@
       "vllm_config": {
         "port": 8005,
         "gpu_device": 1,
-        "gpu_memory_utilization": 0.10,
+        "gpu_memory_utilization": 0.08,
         "tensor_parallel_size": 1,
         "dtype": "bfloat16",
         "trust_remote_code": false,
