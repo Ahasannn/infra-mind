@@ -12,6 +12,7 @@ from MAR.Utils.telemetry import GraphTrace, NodeTiming, utc_now_iso, LLMUsageTra
 from MAR.Utils.utils import find_mode
 from MAR.Agent.agent_registry import AgentRegistry
 from MAR.SystemRouter.metrics_watcher import model_metrics
+from MAR.LLM.gpt_chat import _is_non_retryable_server_error
 
 class Graph(ABC):
     """
@@ -255,7 +256,7 @@ class Graph(ABC):
         inputs: Dict[str, str],
         num_rounds: int = 2,
         max_tries: int = 3,
-        max_time: int = 100,
+        max_time: int = 1800,  # 30 minutes for high-load queue scenarios
         request_timeout: Optional[float] = None,
         trace: Optional[GraphTrace] = None,
     ) -> Tuple[List[Any], Any]:
@@ -367,6 +368,8 @@ class Graph(ABC):
                                 print(f"[DEBUG] Exception message: {error_msg}")
                                 if isinstance(e, TimeoutError):
                                     timed_out = True
+                                    break
+                                if _is_non_retryable_server_error(e):
                                     break
                                 if tries >= max_tries:
                                     logger.error(f"Graph {self.id}: Node {node_id} failed after {max_tries} attempts: {error_msg}")
@@ -522,7 +525,7 @@ class Graph(ABC):
         input: Dict[str, str],
         num_rounds: int = 3,
         max_tries: int = 3,
-        max_time: int = 600,
+        max_time: int = 1800,  # 30 minutes for high-load queue scenarios
         trace: Optional[GraphTrace] = None,
     ) -> Tuple[List[Any], Any]:
         if trace is not None:

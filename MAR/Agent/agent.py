@@ -4,13 +4,11 @@ import os
 import time
 from loguru import logger
 
-from openai import OpenAI
-
 from MAR.Agent.agent_registry import AgentRegistry
 from MAR.LLM.llm_profile_full import get_model_max_context_len, get_model_max_output_tokens
 from MAR.LLM.llm_registry import LLMRegistry
 from MAR.LLM.llm import LLM
-from MAR.LLM.gpt_chat import _resolve_api_key, _resolve_base_url
+from MAR.LLM.gpt_chat import _resolve_api_key, _resolve_base_url, _get_shared_sync_client, _normalize_request_timeout
 from MAR.LLM.price import cal_token, truncate_text_for_model, cost_count
 from MAR.Roles.role_registry import RoleRegistry
 from MAR.Graph.node import Node
@@ -279,12 +277,12 @@ class Agent(Node):
         request_timeout: float | None = None,
     ) -> str:
         """Call LLM with streaming to capture TTFT and TPOT metrics."""
-        timeout = request_timeout if request_timeout is not None else 120.0
-        client = OpenAI(
+        timeout = _normalize_request_timeout(request_timeout)
+        base_client = _get_shared_sync_client(
             base_url=_resolve_base_url(self.llm.model_name),
             api_key=_resolve_api_key(),
-            timeout=timeout,
         )
+        client = base_client.with_options(timeout=timeout)
         if max_tokens is None:
             max_tokens = LLM.DEFAULT_MAX_TOKENS
         else:
@@ -477,12 +475,12 @@ class FinalRefer(Node):
         request_timeout: float | None = None,
     ) -> str:
         """Call LLM with streaming to capture TTFT and TPOT metrics."""
-        timeout = request_timeout if request_timeout is not None else 120.0
-        client = OpenAI(
+        timeout = _normalize_request_timeout(request_timeout)
+        base_client = _get_shared_sync_client(
             base_url=_resolve_base_url(self.llm.model_name),
             api_key=_resolve_api_key(),
-            timeout=timeout,
         )
+        client = base_client.with_options(timeout=timeout)
         if max_tokens is None:
             max_tokens = LLM.DEFAULT_MAX_TOKENS
         else:

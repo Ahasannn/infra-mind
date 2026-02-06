@@ -92,6 +92,8 @@ def _fix_fracs(string):
         substrs = substrs[1:]
         for substr in substrs:
             new_str += "\\frac"
+            if len(substr) == 0:  # Guard against empty substring
+                continue
             if substr[0] == "{":
                 new_str += substr
             else:
@@ -143,8 +145,10 @@ def _fix_sqrt(string):
     if "\\sqrt" not in string:
         return string
     splits = string.split("\\sqrt")
-    new_string = splits[0] 
+    new_string = splits[0]
     for split in splits[1:]:
+        if len(split) == 0:  # Guard against empty split
+            continue
         if split[0] != "{":
             a = split[0]
             new_substr = "\\sqrt{" + a + "}" + split[1:]
@@ -196,7 +200,7 @@ def _strip_string(string):
     # if empty, return empty string
     if len(string) == 0:
         return string
-    if string[0] == ".":
+    if len(string) > 0 and string[0] == ".":
         string = "0" + string
 
     # to consider: get rid of e.g. "k = " or "q = " at beginning
@@ -277,16 +281,18 @@ def remove_boxed(s):
         return None
 
 def MATH_get_predict(pred_str):
+    if not isinstance(pred_str, str):
+        return "0"
     if '\\boxed' in pred_str:
         pred = remove_boxed(last_boxed_only_string(pred_str))
         return pred.strip() if pred is not None else "0"
     elif('answer is ' in pred_str):
         pred = pred_str.split('answer is ')[-1].strip().rstrip(".")
-        return pred.strip()
+        return pred.strip() if len(pred) > 0 else "0"
     elif len(pred_str) > 0:
-        return pred_str[-1]
+        return pred_str.strip() if len(pred_str.strip()) > 0 else "0"
     else:
-        return "A"
+        return "0"
     
 
 def MATH_is_correct(pred,reference):

@@ -6,10 +6,15 @@ import astunparse
 import contextlib
 import io
 import multiprocessing as mp
+import os
 from typing import List
 
 from MAR.Tools.coding.executor_utils import function_with_timeout
 from MAR.Tools.coding.executor_types import ExecuteResult, Executor
+
+# Configurable code execution timeout (default: 5 seconds)
+# Can be overridden via environment variable for tighter control
+DEFAULT_CODE_TIMEOUT = int(os.environ.get("CODE_EXECUTION_TIMEOUT", "5"))
 
 
 def get_call_str(assert_statement: str) -> str:
@@ -21,7 +26,9 @@ def get_call_str(assert_statement: str) -> str:
 
     return astunparse.unparse(call_str).strip()
 
-def get_output(func: str, assert_statement: str, timeout: int = 5) -> str:
+def get_output(func: str, assert_statement: str, timeout: int = None) -> str:
+    if timeout is None:
+        timeout = DEFAULT_CODE_TIMEOUT
     try:
         exec(f"from typing import *\n{func}", globals())
         func_call = get_call_str(assert_statement)
@@ -43,7 +50,9 @@ def _exec_worker(code: str, result_queue: mp.Queue):
         result_queue.put(("error", f"Error occurred: {e}"))
 
 
-def execute_code_get_return(code: str, timeout: int = 10):
+def execute_code_get_return(code: str, timeout: int = None):
+    if timeout is None:
+        timeout = DEFAULT_CODE_TIMEOUT * 2  # 2x for complex operations
     """Execute code with hard timeout using multiprocessing.
 
     Unlike threading, child processes can be forcibly killed via
@@ -69,7 +78,9 @@ def execute_code_get_return(code: str, timeout: int = 10):
         return None
 
 class PyExecutor(Executor):
-    def execute(self, func: str, tests: List[str], timeout: int = 5, verbose: bool = True) -> ExecuteResult:
+    def execute(self, func: str, tests: List[str], timeout: int = None, verbose: bool = True) -> ExecuteResult:
+        if timeout is None:
+            timeout = DEFAULT_CODE_TIMEOUT
         # Combine function code and assert statement
         imports = 'from typing import *'
         func_test_list = [f'{imports}\n{func}\n{test}' for test in tests]
@@ -98,7 +109,9 @@ class PyExecutor(Executor):
         feedback += "\n" + "\n".join(failed_tests)
         return is_passing, feedback, tuple(state)
 
-    def evaluate(self, name: str, func: str, test: str, timeout: int = 5) -> bool:
+    def evaluate(self, name: str, func: str, test: str, timeout: int = None) -> bool:
+        if timeout is None:
+            timeout = DEFAULT_CODE_TIMEOUT
         """
         Evaluates the implementation on Human-Eval Python.
 

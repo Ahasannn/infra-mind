@@ -149,7 +149,7 @@ def parse_args():
     parser.add_argument('--start_epoch', type=int, default=0)
     parser.add_argument('--cost_rate', type=float, default=100.0)
     parser.add_argument('--max_agent', type=int, default=5)
-    parser.add_argument("--request-timeout", type=float, default=600.0, help="Per-request timeout in seconds.")
+    parser.add_argument("--request-timeout", type=float, default=1800.0, help="Per-request timeout in seconds (30 min for high-load queue scenarios).")
     parser.add_argument("--arrival-rate", type=float, nargs='+', default=[0.0], help="Arrival rate(s) (req/min) for test shooting.")
     parser.add_argument("--arrival-pattern", type=str, default="poisson", help="Arrival pattern for test shooting.")
     parser.add_argument("--concurrency", type=int, default=1, help="Max concurrent in-flight requests in test shooting.")
@@ -518,6 +518,17 @@ if __name__ == '__main__':
                 handler=handler,
                 item_id_fn=lambda row, idx: str(row.get("id", idx)),
             )
+
+            # Log failed requests to error file (not CSV)
+            failed_count = sum(1 for r in results if not r.success)
+            if failed_count > 0:
+                error_log_path = f"logs/motivation_plot_generator_data/failed_requests_math_{current_time}.log"
+                logger.warning(f"Found {failed_count} failed requests. Logging to {error_log_path}")
+                with open(error_log_path, "w") as f:
+                    for res in sorted(results, key=lambda r: r.index):
+                        if not res.success:
+                            f.write(f"Request {res.index} (item_id={res.item_id}): {res.error}\n")
+
             for res in sorted(results, key=lambda r: r.index):
                 if not res.success:
                     continue
@@ -534,9 +545,15 @@ if __name__ == '__main__':
                 transitions = payload.get("transitions", [])
 
                 eval_start_ts = time.time()
-                predict_answer = MATH_get_predict(result)
-                gold_answer = MATH_get_predict(true_answer)
-                is_solved = MATH_is_correct(predict_answer, true_answer)
+                try:
+                    predict_answer = MATH_get_predict(result)
+                    gold_answer = MATH_get_predict(true_answer)
+                    is_solved = MATH_is_correct(predict_answer, true_answer)
+                except Exception as e:
+                    logger.warning(f"Answer parsing failed for item {item_id}: {e}")
+                    predict_answer = "0"
+                    gold_answer = MATH_get_predict(true_answer) if true_answer else "0"
+                    is_solved = False
                 total_solved = total_solved + is_solved
                 total_executed = total_executed + 1
                 utility = is_solved - cost * args.cost_rate
