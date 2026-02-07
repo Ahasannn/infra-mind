@@ -370,8 +370,7 @@ class MasRouter(nn.Module):
 
         skipped_indices = set()
         if len(entries) > 1:
-            # Limit concurrent workers to prevent memory overload
-            with ThreadPoolExecutor(max_workers=min(4, len(entries))) as executor:
+            with ThreadPoolExecutor(max_workers=len(entries)) as executor:
                 futures = [executor.submit(run_entry, entry) for entry in entries]
                 for future in as_completed(futures):
                     idx, output, cost_delta, compact = future.result()

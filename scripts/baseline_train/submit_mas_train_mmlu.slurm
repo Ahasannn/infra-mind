@@ -121,6 +121,7 @@ CMD="python Experiments/run_mmlu.py \
   --cost_rate ${COST_RATE} \
   --dataset-root ${MMLU_DATASET_ROOT} \
   --train-telemetry-csv ${TELEMETRY_CSV} \
+  --skip-test \
   --save-checkpoint ${CHECKPOINT_PATH}"
 
 # Add checkpoint resumption if exists

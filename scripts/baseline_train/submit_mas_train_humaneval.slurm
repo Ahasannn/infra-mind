@@ -115,6 +115,7 @@ CMD="python Experiments/run_humaneval.py \
   --test_limit 16 \
   --cost_rate ${COST_RATE} \
   --train-telemetry-csv ${TELEMETRY_CSV} \
+  --skip-test \
   --save-checkpoint ${CHECKPOINT_PATH}"
 
 # Add checkpoint resumption if exists
