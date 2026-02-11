@@ -8,11 +8,12 @@ mkdir -p "${LOG_DIR}"
 # ==============================================================================
 # STORAGE CONFIGURATION
 # ==============================================================================
-# All caches go to blue disk to avoid permission issues on /scratch/local
-STORAGE_ROOT="/blue/qi855292.ucf/ah872032.ucf"
+# All caches go to orange storage to avoid blue congestion
+STORAGE_ROOT="/orange/qi855292.ucf/ah872032.ucf"
 
 # Model weights cache
 export HF_HOME="${STORAGE_ROOT}/huggingface_cache"
+export HF_DATASETS_CACHE="${STORAGE_ROOT}/huggingface_cache/datasets"
 mkdir -p "${HF_HOME}"
 
 # PyTorch / Triton / TorchInductor caches (fixes PermissionError on /scratch/local)

@@ -17,10 +17,10 @@ Traditional LLM routing approaches focus solely on task characteristics, ignorin
 
 INFRAMIND consists of two main components:
 
-1. **System-Aware Router** (`MAR/SystemRouter/`): Hierarchical CMDP-based routing with infrastructure monitoring
+1. **InfraMind** (`MAR/InfraMind/`): Hierarchical CMDP-based routing with infrastructure monitoring
 2. **Multi-Agent Graph Framework** (`MAR/Graph/`): Flexible execution engine for collaborative LLM reasoning
 
-### System-Aware Router
+### InfraMind
 
 - **Planner**: Selects collaboration topology and role set at query arrival (t=0)
 - **Executor**: Dynamically routes (LLM, strategy) per role during execution based on:
@@ -60,10 +60,10 @@ uv sync --frozen --extra serve
    KEY=""  # API key
    ```
 
-2. **Blue Storage** (HPC): Configure paths in `scripts/setup_hpc_env.sh`
+2. **Orange Storage** (HPC): Configure paths in `scripts/setup_hpc_env.sh`
    ```bash
-   export BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
-   export HF_HOME="${BLUE_STORAGE}/huggingface_cache"
+   export ORANGE_STORAGE="/orange/qi855292.ucf/ah872032.ucf"
+   export HF_HOME="${ORANGE_STORAGE}/huggingface_cache"
    ```
 
 ### Datasets
@@ -107,25 +107,25 @@ Model pool includes:
 
 ## 🧪 Running Experiments
 
-### System-Aware Router Training
+### InfraMind Training
 
 Train the infrastructure-aware router on each dataset:
 
 ```bash
 # MBPP dataset
-python Experiments/train_system_router_mbpp.py
+python Experiments/train_inframind_mbpp.py
 
 # GSM8K dataset
-python Experiments/train_system_router_gsm8k.py --dataset-path Datasets/gsm8k/gsm8k.jsonl
+python Experiments/train_inframind_gsm8k.py --dataset-path Datasets/gsm8k/gsm8k.jsonl
 
 # MATH dataset
-python Experiments/train_system_router_math.py --dataset-root Datasets/MATH
+python Experiments/train_inframind_math.py --dataset-root Datasets/MATH
 
 # MMLU dataset
-python Experiments/train_system_router_mmlu.py --dataset-root Datasets/MMLU/data
+python Experiments/train_inframind_mmlu.py --dataset-root Datasets/MMLU/data
 
 # HumanEval dataset
-python Experiments/train_system_router_humaneval.py --dataset-path Datasets/humaneval/humaneval-py.jsonl
+python Experiments/train_inframind_humaneval.py --dataset-path Datasets/humaneval/humaneval-py.jsonl
 ```
 
 ### Baseline MAS Router Training (Comparison)
@@ -149,7 +149,7 @@ python Experiments/run_mbpp.py --epochs 2 --batch_size 32 --lr 0.01
 Test routers under various arrival rates (requests per minute):
 
 ```bash
-# System-Aware Router
+# InfraMind
 sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_mbpp.slurm
 
 # Sweeps test at: 2, 5, 100, 200, 300 req/min with Poisson arrival pattern
@@ -172,8 +172,8 @@ jupyter notebook visualization/motivation_plots.ipynb
 ```
 .
 ├── MAR/                            # Core framework
-│   ├── SystemRouter/              # Infrastructure-aware routing (INFRAMIND)
-│   │   ├── system_router.py      # Hierarchical CMDP implementation
+│   ├── InfraMind/                 # Infrastructure-aware routing (INFRAMIND)
+│   │   ├── inframind_router.py   # Hierarchical CMDP implementation
 │   │   ├── metrics_watcher.py    # Real-time vLLM metrics collection
 │   │   └── training.py           # CMDP training loop
 │   ├── MasRouter/                # Baseline MAS Router
@@ -184,7 +184,7 @@ jupyter notebook visualization/motivation_plots.ipynb
 │   └── Prompts/                  # Prompt templates
 │
 ├── Experiments/                   # Training and evaluation scripts
-│   ├── train_system_router_*.py  # System-aware router training
+│   ├── train_inframind_*.py  # System-aware router training
 │   └── run_*.py                  # Baseline MAS Router training
 │
 ├── Datasets/                      # Dataset loaders

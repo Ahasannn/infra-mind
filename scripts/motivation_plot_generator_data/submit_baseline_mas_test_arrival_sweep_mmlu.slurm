@@ -48,23 +48,26 @@ cleanup_vllm() {
     echo "Cleaning up vLLM servers..."
     echo "========================================="
 
-    # Kill all vLLM processes from PID files
-    if ls logs/vllm/*.pid >/dev/null 2>&1; then
-        for pidfile in logs/vllm/*.pid; do
+    # Use job-specific log directory to avoid killing other jobs' vLLM servers
+    local vllm_log_dir="logs/vllm/job_${SLURM_JOB_ID}"
+
+    if ls "${vllm_log_dir}"/*.pid >/dev/null 2>&1; then
+        for pidfile in "${vllm_log_dir}"/*.pid; do
             if [ -f "$pidfile" ]; then
                 pid=$(cat "$pidfile")
                 name=$(basename "$pidfile" .pid)
                 if kill -0 "$pid" 2>/dev/null; then
                     echo "Stopping $name (PID $pid)"
-                    kill -TERM "$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+                    kill -TERM "$pid" 2>/dev/null
+                    sleep 2
+                    if kill -0 "$pid" 2>/dev/null; then
+                        kill -KILL "$pid" 2>/dev/null
+                    fi
                 fi
                 rm -f "$pidfile"
             fi
         done
     fi
-
-    # Extra safety: kill any remaining vLLM processes
-    pkill -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
 
     echo "Cleanup complete"
     echo "========================================="

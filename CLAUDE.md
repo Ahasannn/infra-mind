@@ -96,11 +96,11 @@ Model URLs are auto-configured via `MAR/LLM/llm_profile_full.json`.
 
 ### Core Modules (`MAR/`)
 
-#### **SystemRouter/** - INFRAMIND Main Contribution
+#### **InfraMind/** - INFRAMIND Main Contribution
 
 Infrastructure-aware routing using hierarchical CMDP:
 
-- **system_router.py**: Hierarchical CMDP implementation
+- **inframind_router.py**: Hierarchical CMDP implementation
   - **Planner**: Selects topology + role set at t=0 based on query embedding
   - **Executor**: Selects (LLM, strategy) per role during runtime based on:
     - Query embedding
@@ -240,9 +240,9 @@ INFRAMIND monitors:
 ### Modifying CMDP Architecture
 
 Key files to modify:
-- `MAR/SystemRouter/system_router.py`: State/action spaces, policy networks
-- `MAR/SystemRouter/training.py`: Training loop, reward function
-- `MAR/SystemRouter/metrics_watcher.py`: System state representation
+- `MAR/InfraMind/inframind_router.py`: State/action spaces, policy networks
+- `MAR/InfraMind/training.py`: Training loop, reward function
+- `MAR/InfraMind/metrics_watcher.py`: System state representation
 
 ## HPC Workflow
 

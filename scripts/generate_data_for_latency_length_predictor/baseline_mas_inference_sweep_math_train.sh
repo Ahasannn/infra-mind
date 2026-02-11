@@ -61,7 +61,7 @@ for pair in "${RUN_CONFIGS[@]}"; do
         --concurrency "$concurrency" \
         --arrival-rate "$arrival_rate" \
         --arrival-pattern "$pattern" \
-        --checkpoint "${CHECKPOINT_DIR}/mas_math_train_full.pth" \
+        --checkpoint "${CHECKPOINT_DIR}/mas_math_train_${TRAIN_LIMIT}.pth" \
         --test-telemetry-csv "$OUTPUT_CSV" \
         --test-split train \
         --generate-predictor-data \

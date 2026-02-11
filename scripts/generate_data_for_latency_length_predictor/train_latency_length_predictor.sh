@@ -13,9 +13,9 @@ SAVE_DIR="${BLUE_STORAGE}/checkpoints/predictors"
 mkdir -p "$SAVE_DIR"
 
 # Training hyperparameters
-EPOCHS=50
+EPOCHS=20
 BATCH_SIZE=32
-LR=0.001
+LR=0.01
 
 echo "========================================"
 echo "Latency & Length Predictor Training"

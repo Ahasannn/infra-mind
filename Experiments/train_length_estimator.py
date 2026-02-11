@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from MAR.SystemRouter.length_estimator import (  # noqa: E402
+from MAR.InfraMind.length_estimator import (  # noqa: E402
     LengthEstimator,
     LengthEstimatorBundle,
     LengthEstimatorConfig,
@@ -18,12 +18,12 @@ from MAR.SystemRouter.length_estimator import (  # noqa: E402
     save_length_estimator,
     train_length_estimator,
 )
-from MAR.SystemRouter.system_aware_router import SemanticEncoder  # noqa: E402
+from MAR.InfraMind.inframind_router import SemanticEncoder  # noqa: E402
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train output length estimator from system router CSV.")
-    parser.add_argument("--csv-path", type=str, required=True, help="Path to system router training CSV.")
+    parser = argparse.ArgumentParser(description="Train output length estimator from InfraMind CSV.")
+    parser.add_argument("--csv-path", type=str, required=True, help="Path to InfraMind training CSV.")
     parser.add_argument("--record-type", type=str, default="role_step", help="CSV record_type filter.")
     parser.add_argument("--batch-size", type=int, default=32, help="Training batch size.")
     parser.add_argument("--embed-batch-size", type=int, default=64, help="Prompt embedding batch size.")

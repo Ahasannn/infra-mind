@@ -40,12 +40,18 @@ echo "HF Cache: ${HF_HOME}"
 echo "HF Token: $(if [[ -n "${HF_TOKEN}" ]]; then echo "✓ Configured"; else echo "✗ Missing"; fi)"
 echo ""
 
+# Read train_limit from dataset config
+CONFIG_FILE="${REPO_ROOT}/Experiments/dataset_config.json"
+TRAIN_LIMIT=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}'))['math']['train_limit'])")
+echo "Train Limit (from config): ${TRAIN_LIMIT}"
+echo ""
+
 # Checkpoint and telemetry paths
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"
 mkdir -p "${CHECKPOINT_DIR}"
-CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_math_train_full.pth"
+CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_math_train_${TRAIN_LIMIT}.pth"
 TELEMETRY_DIR="logs/baseline_mas_training/math"
-TELEMETRY_CSV="${TELEMETRY_DIR}/mas_train_math_full.csv"
+TELEMETRY_CSV="${TELEMETRY_DIR}/mas_train_math_${TRAIN_LIMIT}.csv"
 mkdir -p logs "${TELEMETRY_DIR}"
 
 # Dataset configuration
@@ -67,23 +73,33 @@ cleanup_vllm() {
     echo "Cleaning up vLLM servers..."
     echo "========================================="
 
-    # Kill all vLLM processes from PID files
-    if ls logs/vllm/*.pid >/dev/null 2>&1; then
-        for pidfile in logs/vllm/*.pid; do
+    # Use job-specific log directory
+    local vllm_log_dir="logs/vllm/job_${SLURM_JOB_ID}"
+
+    # Kill all vLLM processes from PID files in job-specific directory
+    if ls "${vllm_log_dir}"/*.pid >/dev/null 2>&1; then
+        for pidfile in "${vllm_log_dir}"/*.pid; do
             if [ -f "$pidfile" ]; then
                 pid=$(cat "$pidfile")
                 name=$(basename "$pidfile" .pid)
                 if kill -0 "$pid" 2>/dev/null; then
                     echo "Stopping $name (PID $pid)"
-                    kill -TERM "$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+                    kill -TERM "$pid" 2>/dev/null
+                    sleep 2
+                    if kill -0 "$pid" 2>/dev/null; then
+                        kill -KILL "$pid" 2>/dev/null
+                    fi
                 fi
                 rm -f "$pidfile"
             fi
         done
+    else
+        echo "No PID files found in ${vllm_log_dir}"
     fi
 
-    # Extra safety: kill any remaining vLLM processes
-    pkill -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
+    # Extra safety: kill any vLLM processes spawned by this job
+    # Only kill processes owned by current user to avoid affecting other jobs
+    pkill -u $USER -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
 
     echo "Cleanup complete"
     echo "========================================="
@@ -113,12 +129,12 @@ bash scripts/check_vllm_status.sh
 echo ""
 
 # Build training command
-# Full dataset training (7500 examples, ~21 hours for 2 epochs)
+# Training with config-specified limit (${TRAIN_LIMIT} examples)
 CMD="python Experiments/run_math.py \
+  --train_limit ${TRAIN_LIMIT} \
   --epochs 2 \
   --batch_size 32 \
   --lr 0.01 \
-  --test_limit 16 \
   --cost_rate ${COST_RATE} \
   --dataset-root ${MATH_DATASET_ROOT} \
   --train-telemetry-csv ${TELEMETRY_CSV} \

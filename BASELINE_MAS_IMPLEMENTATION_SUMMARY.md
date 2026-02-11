@@ -158,7 +158,7 @@ Created SLURM wrappers in `scripts/motivation_plot_generator_data/`:
 **Common Features:**
 - Activate virtual environment
 - Set environment variables (KEY, TOKENIZERS_PARALLELISM)
-- Configure blue storage and HF cache
+- Configure orange storage and HF cache
 - Start vLLM model pool
 - Verify server health
 - Execute sweep script
@@ -190,10 +190,11 @@ Created SLURM wrappers in `scripts/motivation_plot_generator_data/`:
 - **MBPP, GSM8K, MMLU**: 300 samples
 - **HumanEval**: 150 samples (only 164 total examples available)
 
-### 4. Blue Storage Usage
+### 4. Storage Layout
 - All checkpoints: `${BLUE_STORAGE}/checkpoints/mas_router/`
 - Dataset caches: `${BLUE_STORAGE}/datasets/`
-- HuggingFace cache: `${BLUE_STORAGE}/huggingface_cache`
+- HuggingFace cache: `${ORANGE_STORAGE}/huggingface_cache`
+- All other caches (torch, triton, tmp): `${ORANGE_STORAGE}/`
 
 ## Log Directory Structure
 
@@ -351,7 +352,7 @@ sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_s
 - [x] All 4 datasets have deterministic sampling (stratified where applicable)
 - [x] All 4 datasets have training SLURM scripts matching MATH pattern
 - [x] All 4 datasets have arrival rate sweep scripts with proper config
-- [x] All scripts use blue storage for checkpoints/datasets/caches
+- [x] All scripts use orange storage for caches, blue for checkpoints/datasets
 - [x] All scripts have proper vLLM startup and cleanup
 - [x] All telemetry CSVs follow consistent field structure
 - [x] Checkpoint auto-resume works for all datasets
