@@ -32,10 +32,14 @@ for port in 8001 8002 8003 8004 8005; do
 done
 echo ""
 
-# Check PID files
-echo "[4] vLLM PIDs from logs/vllm/*.pid:"
-if ls logs/vllm/*.pid >/dev/null 2>&1; then
-    for pidfile in logs/vllm/*.pid; do
+# Check PID files (job-specific directory under SLURM, fallback to shared)
+VLLM_PID_DIR="logs/vllm"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    VLLM_PID_DIR="logs/vllm/job_${SLURM_JOB_ID}"
+fi
+echo "[4] vLLM PIDs from ${VLLM_PID_DIR}/*.pid:"
+if ls "${VLLM_PID_DIR}"/*.pid >/dev/null 2>&1; then
+    for pidfile in "${VLLM_PID_DIR}"/*.pid; do
         name=$(basename "$pidfile" .pid)
         if [ -f "$pidfile" ]; then
             pid=$(cat "$pidfile")

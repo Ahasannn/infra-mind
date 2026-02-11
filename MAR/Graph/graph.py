@@ -11,8 +11,8 @@ from MAR.Graph.node import Node
 from MAR.Utils.telemetry import GraphTrace, NodeTiming, utc_now_iso, LLMUsageTracker
 from MAR.Utils.utils import find_mode
 from MAR.Agent.agent_registry import AgentRegistry
-from MAR.SystemRouter.metrics_watcher import model_metrics
-from MAR.SystemRouter.prompt_strategies import PromptStrategy
+from MAR.InfraMind.metrics_watcher import model_metrics
+from MAR.InfraMind.prompt_strategies import PromptStrategy
 from MAR.LLM.gpt_chat import _is_non_retryable_server_error
 
 _STRATEGY_CHOICES = [s.value for s in PromptStrategy]

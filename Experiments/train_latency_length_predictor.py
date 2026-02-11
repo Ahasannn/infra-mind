@@ -17,7 +17,7 @@ import torch
 from loguru import logger
 
 # Latency estimator
-from MAR.SystemRouter.latency_estimator import (
+from MAR.InfraMind.latency_estimator import (
     prepare_latency_estimator_dataset,
     LatencyEstimator,
     LatencyEstimatorConfig,
@@ -26,7 +26,7 @@ from MAR.SystemRouter.latency_estimator import (
 )
 
 # Length estimator
-from MAR.SystemRouter.length_estimator import (
+from MAR.InfraMind.length_estimator import (
     prepare_length_estimator_dataset,
     LengthEstimator,
     LengthEstimatorConfig,
@@ -37,7 +37,7 @@ from MAR.SystemRouter.length_estimator import (
     build_length_estimator_metadata,
     LengthEstimatorDataset,
 )
-from MAR.SystemRouter.system_aware_router import SemanticEncoder
+from MAR.InfraMind.inframind_router import SemanticEncoder
 
 
 def parse_args():

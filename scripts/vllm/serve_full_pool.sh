@@ -17,8 +17,15 @@ else
     exit 1
 fi
 
-# LOGS -> LOCAL PROJECT FOLDER
-LOG_DIR="${ROOT_DIR}/logs/vllm"
+# LOGS -> LOCAL PROJECT FOLDER (job-specific when running under SLURM)
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    # Running under SLURM - use job-specific subdirectory to avoid conflicts
+    LOG_DIR="${ROOT_DIR}/logs/vllm/job_${SLURM_JOB_ID}"
+    echo "[Setup] SLURM Job ID:            ${SLURM_JOB_ID} (isolated logs/PIDs)"
+else
+    # Interactive/local run - use shared directory
+    LOG_DIR="${ROOT_DIR}/logs/vllm"
+fi
 mkdir -p "${LOG_DIR}"
 
 echo "[Setup] HF Cache (Weights):      ${HF_HOME}"
@@ -46,10 +53,12 @@ fi
 # LLM Profile JSON - the single source of truth for model configurations
 LLM_PROFILE_JSON="${LLM_PROFILE_JSON:-${ROOT_DIR}/MAR/LLM/llm_profile_full.json}"
 
+echo "[DEBUG] Checking LLM profile JSON..."
 if [[ ! -f "${LLM_PROFILE_JSON}" ]]; then
   echo "[vLLM] Error: LLM profile not found: ${LLM_PROFILE_JSON}"
   exit 1
 fi
+echo "[DEBUG] LLM profile found: ${LLM_PROFILE_JSON}"
 
 # Network binding
 VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
@@ -74,11 +83,14 @@ if [[ -z "${VLLM_PYTHON}" ]]; then
   exit 1
 fi
 
-if ! "${VLLM_PYTHON}" -c "import vllm" >/dev/null 2>&1; then
+echo "[DEBUG] Python interpreter: ${VLLM_PYTHON}"
+echo "[DEBUG] Checking 'import vllm' ..."
+if ! "${VLLM_PYTHON}" -c "import vllm; print('vllm ok')" 2>&1; then
   echo "[vLLM] Missing vllm in ${VLLM_PYTHON}."
   echo "       Run: uv sync --frozen --extra serve"
   exit 1
 fi
+echo "[DEBUG] vllm import check passed"
 
 VLLM_ENTRYPOINT=("${VLLM_PYTHON}" -m vllm.entrypoints.openai.api_server)
 
@@ -127,31 +139,56 @@ print(data.get("global_settings", {}).get("default_max_model_len", 16384))
 PY
 }
 
-# Wait for a vLLM server to become healthy
+# Detect if vLLM crashed during startup by checking logs for fatal errors
+detect_startup_failure() {
+  local logfile="$1"
+
+  if [[ ! -f "${logfile}" ]]; then
+    return 1  # No log file, can't detect
+  fi
+
+  # Check last 100 lines for fatal initialization errors
+  if tail -100 "${logfile}" 2>/dev/null | grep -qE "(ERROR.*EngineCore failed|ValueError.*cache blocks|RuntimeError.*initialization failed|Available KV cache memory: -|EngineCore failed to start)"; then
+    return 0  # Crash detected
+  fi
+
+  return 1  # No crash detected
+}
+
+# Wait for a vLLM server to become healthy with crash detection
 wait_for_health() {
   local name="$1"
   local port="$2"
   local pidfile="${LOG_DIR}/${name}.pid"
   local logfile="${LOG_DIR}/${name}.log"
 
-  local timeout_s="${VLLM_STARTUP_TIMEOUT_SECONDS:-600}"
+  local timeout_s="${VLLM_STARTUP_TIMEOUT_SECONDS:-3600}"
   local start_s
   start_s="$(date +%s)"
 
   while true; do
+    # Check if process died
     if [[ -f "${pidfile}" ]] && ! kill -0 "$(cat "${pidfile}")" 2>/dev/null; then
-      echo "[vLLM] ${name} failed to start (see ${logfile})"
-      return 1
+      # Process is dead - check if it was a crash during initialization
+      if detect_startup_failure "${logfile}"; then
+        echo "[vLLM] ${name} crashed during initialization (see ${logfile})"
+        return 2  # Special code: needs retry
+      else
+        echo "[vLLM] ${name} failed to start (see ${logfile})"
+        return 1  # Permanent failure
+      fi
     fi
 
+    # Check if healthy
     if curl -sf "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
       echo "[vLLM] ${name} healthy"
-      return 0
+      return 0  # Success
     fi
 
+    # Check timeout
     if (( $(date +%s) - start_s > timeout_s )); then
       echo "[vLLM] ${name} did not become healthy within ${timeout_s}s (see ${logfile})"
-      return 1
+      return 1  # Timeout failure
     fi
 
     sleep 2
@@ -226,6 +263,9 @@ start_server_from_json() {
 
   # Note: HF_HOME environment variable handles the model weight location automatically here
   # --no-enable-prefix-caching: Disable prefix caching to reduce memory overhead
+  # --scheduling-policy priority: Enable priority-based queue scheduling (EDF via InfraMind)
+  #   Lower priority value = served first. Default 0 when not set (FCFS-equivalent).
+  #   InfraMind sets priority = int(deadline) where deadline = arrival_time + budget.
   # VLLM_USE_V1=0: Force v0 engine for stability under high concurrent load
   #   v1 engine (default in 0.14.0) crashes with EngineDeadError / AssertionError
   #   in is_strictly_contiguous(decode_query) when batching many concurrent requests
@@ -239,6 +279,7 @@ start_server_from_json() {
     --max-model-len "${max_model_len}" \
     --tensor-parallel-size "${tensor_parallel_size}" \
     --no-enable-prefix-caching \
+    --scheduling-policy priority \
     --max-num-seqs 32 \
     --swap-space 8 \
     "${extra_flags[@]}" \
@@ -252,23 +293,72 @@ start_server_from_json() {
 }
 
 # Main: Start all models from JSON
+echo "[DEBUG] About to load model configurations..."
 echo "[vLLM] Loading model configurations from: ${LLM_PROFILE_JSON}"
 echo ""
 
+echo "[DEBUG] Calling get_model_count()..."
 MODEL_COUNT="$(get_model_count)"
+echo "[DEBUG] get_model_count() returned: ${MODEL_COUNT}"
 echo "[vLLM] Found ${MODEL_COUNT} models to serve"
 echo ""
 
-# Start each model server
-for (( i=0; i<MODEL_COUNT; i++ )); do
-  start_server_from_json "${i}"
+# Start each model server with retry logic
+MAX_RETRIES=3
 
-  # Get server name and port for health check
+for (( i=0; i<MODEL_COUNT; i++ )); do
   model_name="$(get_model_field "${i}" "Name")"
   server_name="$(echo "${model_name}" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]' '_')"
   port="$(get_model_field "${i}" "port")"
 
-  wait_for_health "${server_name}" "${port}"
+  retry_count=0
+  success=0
+
+  while (( retry_count < MAX_RETRIES )); do
+    # Start the server (skip if already running)
+    start_server_from_json "${i}"
+
+    # Wait for health check
+    wait_for_health "${server_name}" "${port}"
+    health_status=$?
+
+    if [[ ${health_status} -eq 0 ]]; then
+      # Success!
+      success=1
+      break
+    elif [[ ${health_status} -eq 2 ]]; then
+      # Crash detected during initialization - retry
+      retry_count=$((retry_count + 1))
+      if (( retry_count < MAX_RETRIES )); then
+        wait_time=$((retry_count * 5))
+        echo "[vLLM] ${server_name} retry ${retry_count}/${MAX_RETRIES} - waiting ${wait_time}s for GPU memory cleanup..."
+
+        # Kill the crashed process if still alive
+        pidfile="${LOG_DIR}/${server_name}.pid"
+        if [[ -f "${pidfile}" ]]; then
+          pid=$(cat "${pidfile}")
+          kill -9 "${pid}" 2>/dev/null || true
+          rm -f "${pidfile}"
+        fi
+
+        # Wait for GPU memory to be released naturally
+        sleep "${wait_time}"
+
+        echo "[vLLM] Retrying ${server_name}..."
+      fi
+    else
+      # Permanent failure (status 1)
+      echo "[vLLM] ERROR: ${server_name} failed permanently"
+      exit 1
+    fi
+  done
+
+  if [[ ${success} -eq 0 ]]; then
+    echo "[vLLM] ERROR: ${server_name} failed after ${MAX_RETRIES} retries"
+    echo "[vLLM] Log: ${LOG_DIR}/${server_name}.log"
+    exit 1
+  fi
+
   echo ""
 done
 

@@ -25,7 +25,7 @@ from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
 from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
-from MAR.SystemRouter.metrics_watcher import start_metrics_watcher, model_metrics
+from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 from Datasets.mmlu_dataset import MMLUDataset
 from Datasets.math_dataset import MATH_get_predict
 

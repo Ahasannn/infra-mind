@@ -4,14 +4,15 @@
 # Source this at the beginning of any sbatch script:
 #   source scripts/setup_hpc_env.sh
 
-# ===== BLUE STORAGE CONFIGURATION =====
+# ===== STORAGE CONFIGURATION =====
 export BLUE_STORAGE="/blue/qi855292.ucf/ah872032.ucf"
+export ORANGE_STORAGE="/orange/qi855292.ucf/ah872032.ucf"
 
 # ===== HUGGING FACE CONFIGURATION =====
-# 1. Set HF cache directory to blue storage
-export HF_HOME="${BLUE_STORAGE}/huggingface_cache"
+# All model/cache data goes to orange storage (more space, avoids blue congestion)
+export HF_HOME="${ORANGE_STORAGE}/huggingface_cache"
 
-# 2. Read token from blue storage (primary) or fallback to home directory
+# Read token from orange storage (primary) or fallback to home directory
 if [[ -f "${HF_HOME}/token" ]]; then
     export HF_TOKEN=$(cat "${HF_HOME}/token")
 elif [[ -f ~/.cache/huggingface/token ]]; then
@@ -25,20 +26,20 @@ if [[ -z "${HF_TOKEN}" ]]; then
 fi
 
 # ===== PYTORCH / TORCH CACHE CONFIGURATION =====
-export TORCH_HOME="${BLUE_STORAGE}/torch_cache"
-export TRITON_CACHE_DIR="${BLUE_STORAGE}/triton_cache"
-export TRITON_HOME="${BLUE_STORAGE}/triton_cache"
-export TORCHINDUCTOR_CACHE_DIR="${BLUE_STORAGE}/torchinductor_cache"
-export TORCH_EXTENSIONS_DIR="${BLUE_STORAGE}/torch_extensions"
+export TORCH_HOME="${ORANGE_STORAGE}/torch_cache"
+export TRITON_CACHE_DIR="${ORANGE_STORAGE}/triton_cache"
+export TRITON_HOME="${ORANGE_STORAGE}/triton_cache"
+export TORCHINDUCTOR_CACHE_DIR="${ORANGE_STORAGE}/torchinductor_cache"
+export TORCH_EXTENSIONS_DIR="${ORANGE_STORAGE}/torch_extensions"
 
 # ===== TEMPORARY DIRECTORIES =====
 # Critical: Override TMPDIR to prevent writes to /scratch/local
-export TMPDIR="${BLUE_STORAGE}/tmp"
-export TEMP="${BLUE_STORAGE}/tmp"
-export TMP="${BLUE_STORAGE}/tmp"
+export TMPDIR="${ORANGE_STORAGE}/tmp"
+export TEMP="${ORANGE_STORAGE}/tmp"
+export TMP="${ORANGE_STORAGE}/tmp"
 
 # ===== GENERAL CACHE LOCATIONS =====
-export XDG_CACHE_HOME="${BLUE_STORAGE}/cache"
+export XDG_CACHE_HOME="${ORANGE_STORAGE}/cache"
 
 # ===== CREATE DIRECTORIES =====
 mkdir -p "${HF_HOME}" \
@@ -58,6 +59,7 @@ if [[ "${VERBOSE_ENV:-0}" == "1" ]]; then
     echo "HPC Environment Configuration"
     echo "========================================="
     echo "Blue Storage:           ${BLUE_STORAGE}"
+    echo "Orange Storage:         ${ORANGE_STORAGE}"
     echo "HF_HOME:                ${HF_HOME}"
     echo "HF_TOKEN:               $(if [[ -n "${HF_TOKEN}" ]]; then echo "✓ Set"; else echo "✗ Not found"; fi)"
     echo "TORCH_HOME:             ${TORCH_HOME}"

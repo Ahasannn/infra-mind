@@ -16,7 +16,7 @@ from MAR.Prompts.message_aggregation import message_aggregation,inner_test
 from MAR.Prompts.post_process import post_process
 from MAR.Prompts.output_format import output_format_prompt
 from MAR.Prompts.reasoning import reasoning_prompt
-from MAR.SystemRouter.prompt_strategies import get_strategy_prompt
+from MAR.InfraMind.prompt_strategies import get_strategy_prompt
 
 
 def limit_prompt_for_llm(llm_model_name: str, system_prompt: str, user_prompt: str) -> str:
@@ -34,14 +34,8 @@ def limit_prompt_for_llm(llm_model_name: str, system_prompt: str, user_prompt: s
     user_tokens = cal_token(llm_model_name, user_prompt)
     if user_tokens <= available:
         return user_prompt
+    # Silently trim prompt to fit within token budget
     trimmed = truncate_text_for_model(user_prompt, available, llm_model_name)
-    logger.debug(
-        "Trimmed prompt for %s from %d to %d tokens (budget %d)",
-        llm_model_name,
-        user_tokens,
-        cal_token(llm_model_name, trimmed),
-        available,
-    )
     return trimmed
 
 
@@ -173,13 +167,16 @@ class Agent(Node):
         self.post_description = self.role.get_post_description()
         self.post_output_format = self.role.get_post_output_format()
 
-        # Timing metrics for telemetry (like SystemRouterAgent)
+        # Timing metrics for telemetry (like InfraMindAgent)
         self.last_ttft = 0.0
         self.last_tpot = 0.0
 
         # Strategy injection (used only for predictor data generation)
         self.strategy_name = ""
         self.strategy_prompt = ""
+
+        # EDF priority for vLLM scheduling (set by InfraMindGraph from deadline)
+        self.priority: int | None = None
 
         # Reflect
         if reason_name == "Reflection" and self.post_output_format == "None":
@@ -313,6 +310,7 @@ class Agent(Node):
         start = time.perf_counter()
         first_token_time = None
         parts: List[str] = []
+        extra_body = {"priority": self.priority} if self.priority is not None else None
         def _create_stream(msgs, max_out):
             return client.chat.completions.create(
                 model=self.llm.model_name,
@@ -321,6 +319,7 @@ class Agent(Node):
                 max_tokens=max_out,
                 temperature=LLM.DEFAULT_TEMPERATURE,
                 timeout=timeout,
+                extra_body=extra_body,
             )
 
         try:
@@ -480,6 +479,8 @@ class FinalRefer(Node):
         # Strategy injection (used only for predictor data generation)
         self.strategy_name = ""
         self.strategy_prompt = ""
+        # EDF priority for vLLM scheduling (set by InfraMindGraph from deadline)
+        self.priority: int | None = None
 
     def set_strategy(self, strategy: str) -> None:
         """Set prompt strategy for predictor data generation."""
@@ -519,6 +520,7 @@ class FinalRefer(Node):
         start = time.perf_counter()
         first_token_time = None
         parts: List[str] = []
+        extra_body = {"priority": self.priority} if self.priority is not None else None
         def _create_stream(msgs, max_out):
             return client.chat.completions.create(
                 model=self.llm.model_name,
@@ -527,6 +529,7 @@ class FinalRefer(Node):
                 max_tokens=max_out,
                 temperature=LLM.DEFAULT_TEMPERATURE,
                 timeout=timeout,
+                extra_body=extra_body,
             )
 
         try:

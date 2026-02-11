@@ -26,7 +26,7 @@ from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
 from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
-from MAR.SystemRouter.metrics_watcher import start_metrics_watcher, model_metrics
+from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 from Datasets.math_dataset import load_math_dataset, MATH_is_correct, MATH_get_predict
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -100,6 +100,8 @@ BASELINE_TEST_FIELDS = (
     "completion_tokens",
     "strategy_name",
     "query",
+    # Router training hyperparameter
+    "cost_rate",
 )
 
 def load_result(result_file):
@@ -616,6 +618,7 @@ if __name__ == '__main__':
                     "arrival_rate": arrival_rate,
                     "arrival_pattern": args.arrival_pattern,
                     "query": query,
+                    "cost_rate": args.cost_rate,
                 })
                 # Step-level records with vLLM system metrics
                 for step in transitions:
@@ -657,6 +660,7 @@ if __name__ == '__main__':
                         "completion_tokens": step.get("completion_tokens", 0),
                         "strategy_name": step.get("strategy_name", "Concise"),
                         "query": query,
+                        "cost_rate": args.cost_rate,
                     })
                 quality_writer.append_rows(csv_rows)
             test_progress.log_final_summary()

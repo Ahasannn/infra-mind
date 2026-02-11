@@ -5,7 +5,7 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:1
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --mem=32G
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
@@ -24,11 +24,21 @@ echo ""
 REPO_ROOT="/home/ah872032.ucf/system-aware-mas"
 cd "$REPO_ROOT" || exit 1
 
+# Load centralized HPC environment configuration
+echo "Loading HPC environment configuration..."
+source scripts/setup_hpc_env.sh
+
 # Activate virtual environment
 echo "Activating virtual environment..."
 source .venv/bin/activate || exit 1
 echo "Python: $(which python)"
 python --version
+echo ""
+
+# Blue storage configuration (imported from setup_hpc_env.sh)
+echo "Blue Storage: ${BLUE_STORAGE}"
+echo "HF Cache: ${HF_HOME}"
+echo "HF Token: $(if [[ -n "${HF_TOKEN}" ]]; then echo "✓ Configured"; else echo "✗ Missing"; fi)"
 echo ""
 
 # Set environment variables

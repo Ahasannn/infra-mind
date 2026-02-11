@@ -1,3 +1,6 @@
-from MAR.SystemRouter.system_aware_router import SystemAwareRouter
+from MAR.InfraMind.inframind_router import InfraMindRouter
 
-__all__ = ["SystemAwareRouter"]
+# Backwards compatibility alias
+SystemAwareRouter = InfraMindRouter
+
+__all__ = ["SystemAwareRouter", "InfraMindRouter"]
