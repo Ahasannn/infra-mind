@@ -34,7 +34,7 @@ BUDGET_SWEEP="20,60,150"
 
 # Override arrival rates for training (3 rates: low, medium, high)
 # Full config has 6 rates which is too slow; can expand after validation
-ARRIVAL_RATES_CSV="10,100,200"
+ARRIVAL_RATES_CSV="10,100,200,500,1000"
 
 # Dataset
 MATH_DATASET_ROOT="${MATH_DATASET_ROOT:-${BLUE_STORAGE}/datasets/MATH}"

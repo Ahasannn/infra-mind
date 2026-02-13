@@ -436,6 +436,38 @@ class InfraMindRouter(nn.Module):
 
         # Lagrange multiplier for CMDP latency constraint
         self.lagrange_multiplier = nn.Parameter(torch.tensor(lambda_init, device=self.device))
+
+        # Benchmark-based model capability prior (reward shaping)
+        self.capability_prior: Dict[str, Dict[str, float]] = {
+            "Math": {
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": 0.50,
+                "mistralai/Mistral-Small-24B-Instruct-2501": 0.30,
+                "Qwen/Qwen2.5-Coder-14B-Instruct": 0.25,
+                "meta-llama/Llama-3.1-8B-Instruct": 0.20,
+                "meta-llama/Llama-3.2-3B-Instruct": 0.10,
+            },
+            "Code": {
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": 0.35,
+                "mistralai/Mistral-Small-24B-Instruct-2501": 0.40,
+                "Qwen/Qwen2.5-Coder-14B-Instruct": 0.50,
+                "meta-llama/Llama-3.1-8B-Instruct": 0.25,
+                "meta-llama/Llama-3.2-3B-Instruct": 0.10,
+            },
+            "Commonsense": {
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B": 0.45,
+                "mistralai/Mistral-Small-24B-Instruct-2501": 0.50,
+                "Qwen/Qwen2.5-Coder-14B-Instruct": 0.30,
+                "meta-llama/Llama-3.1-8B-Instruct": 0.25,
+                "meta-llama/Llama-3.2-3B-Instruct": 0.15,
+            },
+        }
+        # Pre-compute capability tensor for current domain (indexed by model position)
+        domain_caps = self.capability_prior.get(role_domain, {})
+        self._capability_tensor = torch.tensor(
+            [domain_caps.get(m, 0.0) for m in self.models],
+            device=self.device, dtype=torch.float32,
+        )
+
         self.to(self.device)
 
     # ------------------------------------------------------------------
@@ -728,12 +760,20 @@ class InfraMindRouter(nn.Module):
         semantic_quality: Union[float, torch.Tensor],
         latency: Union[float, torch.Tensor],
         budget_remaining: Union[float, torch.Tensor],
+        model_index=None,
+        capability_weight: float = 0.3,
     ) -> torch.Tensor:
-        """CMDP reward per executor step: quality − λ · (step_latency / budget_remaining)."""
+        """CMDP reward per executor step: quality − λ · (step_latency / budget_remaining) + capability bonus."""
         quality = self._to_tensor(semantic_quality)
         lat = self._to_tensor(latency).to(self.device)
         bud = self._to_tensor(budget_remaining).clamp_min(1.0)
-        return quality - F.softplus(self.lagrange_multiplier) * (lat / bud)
+        reward = quality - F.softplus(self.lagrange_multiplier) * (lat / bud)
+        # Reward shaping: add capability bonus per model
+        if model_index is not None:
+            mi = model_index if isinstance(model_index, torch.Tensor) else torch.tensor(model_index, device=self.device)
+            cap_bonus = self._capability_tensor[mi.long()]
+            reward = reward + capability_weight * cap_bonus
+        return reward
 
     # ------------------------------------------------------------------
     # Internals
