@@ -199,7 +199,9 @@ class InfraMindTrainer:
             device=device,
         )
         budgets = torch.tensor([item["budget_remaining"] for item in batch], device=device)
-        rewards = self.router.compute_executor_reward(qualities, latencies, budgets).detach()
+        rewards = self.router.compute_executor_reward(
+            qualities, latencies, budgets, model_index=model_idx,
+        ).detach()
 
         # Forward pass on full batch
         action_out = self.router.get_executor_action(states, deterministic=False)
