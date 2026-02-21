@@ -79,7 +79,6 @@ CMD="python Experiments/train_inframind_math.py \
   --dataset-root ${MATH_DATASET_ROOT} \
   --limit ${TRAIN_LIMIT} \
   --epochs 3 \
-  --max-tokens 4096 \
   --arrival-rates ${ARRIVAL_RATES_CSV} \
   --arrival-pattern ${ARRIVAL_PATTERN} \
   --budget-sweep ${BUDGET_SWEEP} \

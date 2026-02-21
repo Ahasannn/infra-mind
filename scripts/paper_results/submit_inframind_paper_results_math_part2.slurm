@@ -145,7 +145,6 @@ python -m MAR.InfraMind.training \
     --split test \
     --limit "${TEST_LIMIT}" \
     --epochs 1 \
-    --max-tokens 4096 \
     --arrival-rates "${ARRIVAL_RATES_CSV}" \
     --arrival-pattern "${ARRIVAL_PATTERN}" \
     --budget-sweep "${BUDGET_SWEEP}" \

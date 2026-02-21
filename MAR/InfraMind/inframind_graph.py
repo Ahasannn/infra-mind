@@ -237,7 +237,7 @@ class InfraMindGraph(Graph):
                     while tries < max_tries:
                         tries += 1
                         try:
-                            node.execute(inputs, max_tokens=getattr(self, "max_tokens", None))
+                            node.execute(inputs)
                             success = True
                             break
                         except Exception as e:
@@ -377,7 +377,7 @@ class InfraMindGraph(Graph):
                 decision_text = decision_node.outputs[0]
             else:
                 try:
-                    decision_node.execute(inputs, max_tokens=getattr(self, "max_tokens", None))
+                    decision_node.execute(inputs)
                     decision_success = True
                 except Exception as e:
                     decision_error = str(e)

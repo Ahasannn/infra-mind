@@ -31,7 +31,6 @@ class InfraMindAgent(Node):
         llm_name: str = "",
         reason_name: str = "",
         latency_budget: str | None = None,
-        max_tokens: int | None = None,
         request_timeout: float | None = None,
     ):
         super().__init__(id, reason_name, domain, llm_name)
@@ -59,7 +58,6 @@ class InfraMindAgent(Node):
         self.prompt_base = ""
         self.last_ttft = 0.0
         self.last_tpot = 0.0
-        self.max_tokens = int(max_tokens) if max_tokens else None
         self.request_timeout = float(request_timeout) if request_timeout else None
         # EDF priority for vLLM scheduling (set by InfraMindGraph from deadline)
         self.priority: int | None = None
@@ -122,7 +120,6 @@ class InfraMindAgent(Node):
     def _call_llm_stream(
         self,
         messages: List[Dict[str, str]],
-        max_tokens: int | None = None,
         request_timeout: float | None = None,
     ) -> str:
         timeout = request_timeout if request_timeout is not None else self.request_timeout
@@ -135,15 +132,8 @@ class InfraMindAgent(Node):
             cal_token(self.llm_name, msg.get("content", "")) for msg in messages if isinstance(msg, dict)
         )
         max_context_len = get_model_max_context_len(self.llm_name)
-        default_max_out = self.max_tokens or get_model_max_output_tokens(self.llm_name)
+        default_max_out = get_model_max_output_tokens(self.llm_name)
         allowed_max = resolve_max_output_tokens(self.llm_name, messages, default_max_out)
-        requested_max = None
-        if max_tokens is not None:
-            requested_max = int(max_tokens)
-            if requested_max <= 0:
-                requested_max = 1
-            # Silently limit to requested max_tokens if specified
-            allowed_max = min(requested_max, allowed_max)
 
         # Safety margin for token counting mismatches vs the server tokenizer (e.g., vLLM).
         safe_available = max(0, max_context_len - prompt_tokens - 32)
@@ -156,7 +146,6 @@ class InfraMindAgent(Node):
             )
             allowed_max = 1
         elif allowed_max > safe_available:
-            # Silently adjust max_tokens to fit within context window
             allowed_max = safe_available
         max_tokens = max(1, allowed_max)
         messages, max_tokens, prompt_tokens = fit_messages_to_context(
@@ -222,9 +211,8 @@ class InfraMindAgent(Node):
         if passed:
             return response
         prompt = self._process_inputs(input, spatial_info, temporal_info, **kwargs)
-        max_tokens = kwargs.get("max_tokens")
         request_timeout = kwargs.get("request_timeout")
-        response = self._call_llm_stream(prompt, max_tokens=max_tokens, request_timeout=request_timeout)
+        response = self._call_llm_stream(prompt, request_timeout=request_timeout)
         response = post_process(input, response, self.post_process)
         logger.trace(f"Agent {self.id} Role: {self.role.role} LLM: {self.llm.model_name}")
         logger.trace(f"system prompt:\n {prompt[0]['content']}")
@@ -243,7 +231,7 @@ class InfraMindAgent(Node):
             )
             user_prompt = limit_prompt_for_llm(self.llm.model_name, system_prompt, user_prompt)
             prompt = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-            response = self._call_llm_stream(prompt, max_tokens=max_tokens, request_timeout=request_timeout)
+            response = self._call_llm_stream(prompt, request_timeout=request_timeout)
             logger.trace(f"post system prompt:\n {system_prompt}")
             logger.trace(f"post user prompt:\n {user_prompt}")
             logger.trace(f"post response:\n {response}")

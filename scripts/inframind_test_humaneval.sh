@@ -14,7 +14,6 @@ python Experiments/train_system_router_humaneval.py \
   --split-ratio 0.2 \
   --limit 131 \
   --epochs 0 \
-  --max-tokens 256 \
   --request-timeout 600.0 \
   --seed 42 \
   --arrival-rates "10,30,50,70,100,150,200" \

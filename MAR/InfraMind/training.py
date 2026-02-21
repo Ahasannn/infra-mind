@@ -211,7 +211,6 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
     parser.add_argument("--prompt-file", type=str, default="", help="Override FinalNode prompt file.")
     parser.add_argument("--limit", type=int, default=50, help="Number of items to train on.")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs over the slice.")
-    parser.add_argument("--max-tokens", type=int, default=256, help="Max generation tokens when calling LLMs.")
     parser.add_argument("--request-timeout", type=float, default=1800.0, help="Per-request timeout in seconds (30 min, matches baseline).")
     parser.add_argument("--deterministic", action="store_true", help="Use argmax actions instead of sampling.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
@@ -523,7 +522,6 @@ def main(default_dataset: str = "mbpp") -> None:
 
     env = InfraMindEnv(
         router=router,
-        max_tokens=args.max_tokens,
         prompt_file=prompt_file,
         request_timeout=args.request_timeout,
         quality_fn=adapter.score_response,

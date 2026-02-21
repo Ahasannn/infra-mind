@@ -121,7 +121,6 @@ CMD="python Experiments/train_inframind_math.py \
   --dataset-root ${MATH_DATASET_ROOT} \
   --limit 210 \
   --epochs 1 \
-  --max-tokens 4096 \
   --arrival-rates 200 \
   --arrival-pattern constant \
   --budget-sweep 50 \

@@ -76,7 +76,6 @@ for rate in $ARRIVAL_RATES; do
         --dataset-root "${MATH_DATASET_ROOT}" \
         --limit "${TEST_LIMIT}" \
         --epochs 1 \
-        --max-tokens 4096 \
         --arrival-rates "${rate}" \
         --arrival-pattern "${ARRIVAL_PATTERN}" \
         --budget-sweep "${BUDGET}" \

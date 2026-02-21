@@ -27,10 +27,44 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from loguru import logger
 
+import json
+
 try:
     from openai import AsyncOpenAI
 except ImportError:
     AsyncOpenAI = None  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Ground truth loading
+# ---------------------------------------------------------------------------
+
+def load_ground_truth_map(dataset_root: str, split: str = "train") -> Dict[str, str]:
+    """Load ground truth answers from MATH dataset.
+
+    Returns mapping from item_id (e.g. 'Prealgebra/89') to reference answer string.
+    The answer string includes both the final answer and the reference solution.
+    """
+    gt_map: Dict[str, str] = {}
+    root = Path(dataset_root) / split
+    if not root.is_dir():
+        logger.warning("MATH dataset root not found: {}", root)
+        return gt_map
+    for json_path in root.rglob("*.json"):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            category = json_path.parent.name
+            stem = json_path.stem
+            item_id = f"{category}/{stem}"
+            answer = data.get("answer", "")
+            solution = data.get("solution", "")
+            if answer:
+                gt_map[item_id] = f"Final answer: {answer}\nReference solution: {solution}"
+        except Exception:
+            continue
+    logger.info("Loaded {} ground truth answers from {}", len(gt_map), root)
+    return gt_map
 
 
 # ---------------------------------------------------------------------------
@@ -39,71 +73,60 @@ except ImportError:
 
 JUDGE_SYSTEM_PROMPT = """\
 You are an expert evaluator for a multi-agent math-solving system. Your task is \
-to score an agent's response given the full prompt it received and the reasoning \
-strategy it was instructed to follow.
+to score an agent's response on how much it contributes toward reaching the \
+correct answer.
 
 You will be given:
-1. The FULL PROMPT the agent received — this includes its role description, \
-format requirements, the math problem, and any context or hints from co-agents \
-in the pipeline.
-2. The REASONING STRATEGY the agent was told to use (Flash, Concise, or DeepThink).
+1. The math problem and the agent's role/instructions.
+2. The REFERENCE ANSWER (ground truth) — use this to evaluate correctness.
 3. The agent's RESPONSE.
+
+IMPORTANT: This is a step in a multi-agent pipeline. The agent may not produce \
+the final answer alone — it may contribute partial reasoning that later agents \
+build upon. Score based on the QUALITY OF CONTRIBUTION, not whether a neat \
+final answer appears.
+
+IMPORTANT: Response length is IRRELEVANT. A long chain-of-thought that makes \
+correct progress is just as valuable as a short direct answer. Do NOT penalize \
+verbose responses. Do NOT reward brevity. Only the mathematical correctness and \
+reasoning quality matter.
 
 ## Scoring Rubric (1-10)
 
-### Correctness & Reasoning (primary criteria)
-- **10**: Correct final answer with clear, complete, and logically sound reasoning.
-- **9**: Correct final answer; reasoning is sound but has minor formatting or \
-notation imperfections.
-- **8**: Correct final answer; reasoning has small gaps or unnecessary steps but \
-the core logic holds.
-- **7**: Nearly correct — sound method but a minor arithmetic or algebraic slip \
-leads to a slightly wrong answer.
-- **6**: Correct general approach identified, but execution errors (calculation \
-mistakes, sign errors, mis-substitution) produce a wrong answer.
-- **5**: Partially correct reasoning that captures some key ideas, but the \
-solution path is incomplete or diverges before reaching a valid answer.
-- **4**: Shows awareness of the relevant math topic but the approach is \
-fundamentally flawed or based on incorrect assumptions.
-- **3**: Mostly wrong; only superficial or tangential relevance to the problem.
-- **2**: Almost entirely wrong; response contains minimal mathematical content \
-related to the problem.
-- **1**: Completely wrong, empty, refuses to answer, or is irrelevant to the \
-problem.
-
-### Strategy Alignment (adjust up or down by 1 point)
-- **Flash**: Reward brevity and directness. A Flash response that solves the \
-problem in few steps without unnecessary elaboration is ideal. Do NOT penalize \
-lack of detail.
-- **Concise**: Expect a balanced response — key reasoning steps shown without \
-excessive verbosity. Moderate detail is appropriate.
-- **DeepThink**: Expect thorough step-by-step reasoning with justifications. \
-Penalize shallow or overly brief responses that skip important steps.
+### Correctness & Reasoning (sole criteria)
+- **10**: Arrives at the correct answer with sound reasoning.
+- **9**: Correct answer; reasoning is sound but has minor notation or formatting \
+issues.
+- **8**: Correct answer; reasoning has small gaps or redundant steps but core \
+logic holds.
+- **7**: Reasoning is correct and heading toward the right answer, but the \
+response is incomplete (truncated, unfinished). Award 7 if the mathematical \
+steps shown so far are correct and aligned with the reference solution.
+- **6**: Sound mathematical approach that would lead to the correct answer, but \
+has minor arithmetic or algebraic errors (sign error, miscalculation).
+- **5**: Identifies the right approach/method but makes significant execution \
+errors leading to a wrong answer.
+- **4**: Shows awareness of the relevant topic but the approach has fundamental \
+flaws or incorrect assumptions.
+- **3**: Mostly wrong reasoning, but contains at least one relevant mathematical \
+insight or step.
+- **2**: Almost entirely wrong; minimal mathematical relevance to the problem.
+- **1**: Completely wrong, empty, refuses to answer, or irrelevant.
 
 ### Co-Agent Context Usage (adjust up or down by 1 point)
-- If hints or solutions from co-agents are provided in the prompt, evaluate \
-whether the agent appropriately incorporated, verified, or built upon them.
+- If hints or solutions from co-agents appear in the prompt, evaluate whether \
+the agent appropriately incorporated, verified, or built upon them.
 - Reward agents that correctly identify and fix errors from co-agent hints.
-- Penalize blind copying of co-agent output without verification or added value.
-
-### Format Compliance
-- Penalize by 1 point if the response ignores the explicit format requirements \
-stated in its prompt (e.g., missing "The answer is X" on the last line).
-
-### Automatic Low Scores
-- Response that merely restates or paraphrases the question → cap at 2.
-- Response that is truncated mid-reasoning with no answer → cap at 3.
-- Response that outputs only a final answer with zero reasoning when strategy \
-is DeepThink → cap at 4.
+- Penalize blind copying without verification.
 
 Output ONLY a single integer from 1 to 10. No explanation, no extra text."""
 
 JUDGE_USER_TEMPLATE = """\
-## Full Prompt Given to Agent
+## Problem & Agent Instructions
 {prompt_base}
 
-## Reasoning Strategy
-{strategy_name}
+## Reference Answer (Ground Truth)
+{reference_answer}
 
 ## Agent Response
 {response}
@@ -151,13 +174,14 @@ async def judge_single(
     prompt_base: str,
     strategy_name: str,
     response: str,
+    reference_answer: str = "",
     max_retries: int = 3,
     timeout: float = 300.0,
 ) -> Optional[int]:
     """Call the judge LLM and return a 1-10 score."""
     user_msg = JUDGE_USER_TEMPLATE.format(
         prompt_base=prompt_base,
-        strategy_name=strategy_name,
+        reference_answer=reference_answer or "(not available)",
         response=response,
     )
     for attempt in range(max_retries):
@@ -238,6 +262,11 @@ async def run_judge_pipeline(args: argparse.Namespace) -> None:
         api_key=args.api_key or "EMPTY",
     )
 
+    # Load ground truth answers (if dataset root provided)
+    gt_map: Dict[str, str] = {}
+    if args.dataset_root:
+        gt_map = load_ground_truth_map(args.dataset_root, split=args.dataset_split)
+
     # Load input
     all_rows = load_input_csv(args.input_csv)
     logger.info("Loaded {} total rows from {}", len(all_rows), args.input_csv)
@@ -296,6 +325,9 @@ async def run_judge_pipeline(args: argparse.Namespace) -> None:
 
     async def judge_and_write(row: Dict[str, str]) -> None:
         nonlocal scored_count, failed_count
+        # Look up ground truth by item_id
+        item_id = row.get("item_id", "").strip()
+        reference_answer = gt_map.get(item_id, "")
         async with semaphore:
             score = await judge_single(
                 client,
@@ -303,6 +335,7 @@ async def run_judge_pipeline(args: argparse.Namespace) -> None:
                 prompt_base=row.get("prompt_base", ""),
                 strategy_name=row.get("strategy_name", ""),
                 response=row.get("response", ""),
+                reference_answer=reference_answer,
             )
         async with write_lock:
             if score is not None:
@@ -371,6 +404,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--resume", action="store_true",
         help="Resume from partial output (append to existing output CSV).",
+    )
+    parser.add_argument(
+        "--dataset-root", type=str, default="",
+        help="Path to MATH dataset root (contains train/test dirs with JSON files). "
+             "When provided, ground truth answers are included in the judge prompt.",
+    )
+    parser.add_argument(
+        "--dataset-split", type=str, default="train",
+        help="Dataset split to load ground truth from (default: train).",
     )
     return parser.parse_args()
 
