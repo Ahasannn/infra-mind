@@ -24,11 +24,10 @@ def main() -> None:
     parser.add_argument("--deterministic", action="store_true", help="Use argmax instead of sampling actions.")
     parser.add_argument("--query", type=str, help="Single query to route. Defaults to a small built-in list.")
     parser.add_argument("--tests", nargs="*", help="Python tests (MBPP-style). Required for quality scoring.")
-    parser.add_argument("--max-tokens", type=int, default=256, help="Max generation tokens.")
     args = parser.parse_args()
 
     router = InfraMindRouter()
-    env = InfraMindEnv(router=router, max_tokens=args.max_tokens)
+    env = InfraMindEnv(router=router)
 
     queries = [args.query] if args.query else _default_queries()
     for query in queries:

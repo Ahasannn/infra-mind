@@ -15,7 +15,6 @@ python Experiments/train_system_router_humaneval.py \
   --split-ratio 0.2 \
   --limit 32 \
   --epochs 3 \
-  --max-tokens 256 \
   --request-timeout 600.0 \
   --seed 42 \
   --log-episodes 1 \

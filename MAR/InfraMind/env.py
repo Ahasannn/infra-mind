@@ -108,7 +108,6 @@ class InfraMindEnv:
     def __init__(
         self,
         router: InfraMindRouter,
-        max_tokens: int = 256,
         prompt_file: Optional[str] = None,
         metrics_interval: float = 1.0,
         metrics_url_map: Optional[Dict[str, str]] = None,
@@ -117,7 +116,6 @@ class InfraMindEnv:
         dry_run: bool = False,
     ) -> None:
         self.router = router
-        self.max_tokens = max_tokens
         self.request_timeout = request_timeout
         self.router_lock = threading.Lock()
         self.quality_fn = quality_fn
@@ -173,7 +171,6 @@ class InfraMindEnv:
         if not node_kwargs or len(node_kwargs) != len(role_set):
             node_kwargs = [{} for _ in role_set]
         for kwargs in node_kwargs:
-            kwargs.setdefault("max_tokens", self.max_tokens)
             kwargs.setdefault("request_timeout", self.request_timeout)
         graph_kwargs["node_kwargs"] = node_kwargs
         num_rounds = graph_kwargs.pop("num_rounds", 1)
@@ -189,8 +186,6 @@ class InfraMindEnv:
             runtime_llm_assignment=False,
             **graph_kwargs,
         )
-        graph.max_tokens = self.max_tokens
-
         arrival_time = time.time()
         graph_result = graph.run_with_policy(
             inputs={"query": query},

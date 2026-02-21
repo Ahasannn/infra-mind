@@ -51,6 +51,8 @@ JUDGE_MODEL="${JUDGE_MODEL:-Qwen/Qwen2.5-72B-Instruct}"
 JUDGE_PORT="${JUDGE_PORT:-8010}"
 JUDGE_URL="http://localhost:${JUDGE_PORT}/v1"
 MAX_CONCURRENT="${MAX_CONCURRENT:-64}"
+DATASET_ROOT="${DATASET_ROOT:-/blue/qi855292.ucf/ah872032.ucf/datasets/MATH}"
+DATASET_SPLIT="${DATASET_SPLIT:-train}"
 
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
@@ -135,6 +137,8 @@ CMD="python Experiments/judge_responses.py \
   --judge-model ${JUDGE_MODEL} \
   --judge-url ${JUDGE_URL} \
   --max-concurrent ${MAX_CONCURRENT} \
+  --dataset-root ${DATASET_ROOT} \
+  --dataset-split ${DATASET_SPLIT} \
   --resume"
 
 echo "Command: $CMD"
