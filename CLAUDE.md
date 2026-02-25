@@ -64,20 +64,20 @@ python Experiments/run_mmlu.py              # MMLU dataset
 
 **SLURM Training Jobs** (recommended for full training on HPC):
 ```bash
-sbatch scripts/baseline_train/submit_mas_train_mbpp.slurm
-sbatch scripts/baseline_train/submit_mas_train_gsm8k.slurm
-sbatch scripts/baseline_train/submit_mas_train_humaneval.slurm
+sbatch scripts/baseline_train/mbpp/train_mas_mbpp.slurm
+sbatch scripts/baseline_train/gsm8k/train_mas_gsm8k.slurm
+sbatch scripts/baseline_train/humaneval/train_mas_humaneval.slurm
 sbatch scripts/baseline_train/math/train_mas_math.slurm
-sbatch scripts/baseline_train/submit_mas_train_mmlu.slurm
+sbatch scripts/baseline_train/mmlu/train_mas_mmlu.slurm
 ```
 
-**Arrival Rate Sweeps** (load testing):
+**Baseline Test Sweeps** (arrival rate × cost rate):
 ```bash
-sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_mbpp.slurm
-sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_gsm8k.slurm
-sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_humaneval.slurm
-sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_math.slurm
-sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_mmlu.slurm
+sbatch scripts/test/mbpp/submit_baseline_test_mbpp.slurm
+sbatch scripts/test/gsm8k/submit_baseline_test_gsm8k.slurm
+sbatch scripts/test/humaneval/submit_baseline_test_humaneval.slurm
+sbatch scripts/test/math/submit_baseline_test_math.slurm
+sbatch scripts/test/mmlu/submit_baseline_test_mmlu.slurm
 ```
 
 ## Local vLLM Model Pool
@@ -248,7 +248,7 @@ INFRAMIND monitors:
 1. Create `Datasets/new_dataset.py` with loader class
 2. Implement stratified/deterministic sampling with `limit` parameter
 3. Add experiment script `Experiments/train_system_router_new_dataset.py`
-4. Create SLURM scripts in `scripts/baseline_train/` and `scripts/motivation_plot_generator_data/`
+4. Create SLURM scripts in `scripts/baseline_train/{dataset}/`, `scripts/inframind_training/{dataset}/`, and `scripts/test/{dataset}/`
 
 ### Adding New Roles
 
@@ -272,8 +272,8 @@ Key files to modify:
 1. **Setup**: `source scripts/setup_hpc_env.sh`
 2. **Start vLLM**: `bash scripts/vllm/serve_full_pool.sh`
 3. **Train System Router**: `python Experiments/train_system_router_mbpp.py`
-4. **Train Baseline**: `sbatch scripts/baseline_train/submit_mas_train_mbpp.slurm`
-5. **Load Testing**: `sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_mbpp.slurm`
+4. **Train Baseline**: `sbatch scripts/baseline_train/mbpp/train_mas_mbpp.slurm`
+5. **Load Testing**: `sbatch scripts/test/mbpp/submit_baseline_test_mbpp.slurm`
 6. **Generate Plots**: `python visualization/generate_motivation_plots.py`
 
 ### File Locations
@@ -287,7 +287,7 @@ Key files to modify:
 **Logs**: `logs/`
 - InfraMind training: `logs/inframind_training/{dataset}/`
 - Baseline training: `logs/baseline_train/{dataset}/`
-- Sweep results: `logs/motivation_plot_generator_data/`
+- Test sweep results: `logs/test/{dataset}/`
 - vLLM logs: `logs/vllm/`
 
 ## Troubleshooting
