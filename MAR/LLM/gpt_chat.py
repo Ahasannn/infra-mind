@@ -51,7 +51,7 @@ def _get_shared_sync_client(*, base_url: Optional[str], api_key: str) -> OpenAI:
                         max_connections=2000,  # Total connection pool size
                         max_keepalive_connections=1000,  # Reusable connections
                     ),
-                    timeout=httpx.Timeout(1800.0, connect=60.0),  # 30 min timeout for high-load queue wait
+                    timeout=httpx.Timeout(3600.0, connect=60.0),  # 1 hour timeout for high-load queue wait
                 )
                 client = OpenAI(base_url=base_url, api_key=api_key, http_client=http_client)
             else:

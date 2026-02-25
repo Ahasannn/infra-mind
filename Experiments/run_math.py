@@ -239,13 +239,24 @@ if __name__ == '__main__':
         if not args.test_limit:
             args.test_limit = args.limit
 
-    # Load datasets with stratified sampling if limits are specified
-    train_stratified = args.train_limit if args.train_limit > 0 else 0
-    test_stratified = args.test_limit if args.test_limit > 0 else 0
+    # Load datasets using the same sampling logic as InfraMind's MathAdapter
+    # so both systems are evaluated on the exact same items.
+    # MathAdapter: loads all items (seed=888 shuffle inside load_math_dataset),
+    # then sample(limit=N, shuffle=True, seed=42) → deterministic subset.
+    import random as _random
 
-    train_dataset = load_math_dataset(dataset_root, split="train", stratified_limit=train_stratified)
+    train_dataset = load_math_dataset(dataset_root, split="train")  # all items, shuffled seed=888
+    if args.train_limit and args.train_limit > 0:
+        indices = list(range(len(train_dataset)))
+        _random.Random(42).shuffle(indices)
+        train_dataset = [train_dataset[i] for i in indices[: args.train_limit]]
+
     test_split = getattr(args, "test_split", "test")
-    test_dataset = load_math_dataset(dataset_root, split=test_split, stratified_limit=test_stratified)
+    test_dataset = load_math_dataset(dataset_root, split=test_split)  # all items, shuffled seed=888
+    if args.test_limit and args.test_limit > 0:
+        indices = list(range(len(test_dataset)))
+        _random.Random(42).shuffle(indices)
+        test_dataset = [test_dataset[i] for i in indices[: args.test_limit]]
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     log_file = f"MATH_{current_time}.txt"
@@ -594,6 +605,20 @@ if __name__ == '__main__':
                 total_solved = total_solved + is_solved
                 total_executed = total_executed + 1
                 utility = is_solved - cost * args.cost_rate
+
+                # Update tracker with quality/latency for log_stats summary
+                models_used = [s.get("llm_name", "") for s in transitions if s.get("llm_name")]
+                strategies_used = [s.get("strategy_name", "") for s in transitions if s.get("strategy_name")]
+                topo_name = payload.get("reasoning_name", "")
+                test_progress.total_quality += float(is_solved)
+                test_progress.total_latency += w_latency
+                for m in models_used:
+                    test_progress.model_counts[m] += 1
+                if topo_name:
+                    test_progress.topology_counts[topo_name] += 1
+                for s in strategies_used:
+                    if s:
+                        test_progress.strategy_counts[s] += 1
 
                 # Topology metadata from compact workflow
                 topo_meta = {

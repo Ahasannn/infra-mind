@@ -1,31 +1,31 @@
 #!/bin/bash
-#SBATCH --job-name=paper_im_math_p2
-#SBATCH --output=logs/paper_results/slurm-%j-inframind-part2.out
-#SBATCH --error=logs/paper_results/slurm-%j-inframind-part2.err
+#SBATCH --job-name=test_im_math
+#SBATCH --output=logs/test/math/slurm-%j-inframind.out
+#SBATCH --error=logs/test/math/slurm-%j-inframind.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=16:00:00
+#SBATCH --time=32:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
-# ===== InfraMind — Paper Results for MATH (Part 2 of 2) =====
-# Inference-only (no training). Produces CSV for paper result tables/figures.
+# =========================================================================
+# InfraMind — Test Sweep for MATH
+#   Same configs as training (step4_train_inframind.slurm):
+#     Arrival rates: 10, 30, 50, 100, 150, 200 req/min
+#     Budgets:       10, 30, 50, 100, 200, 300, 600, 1000 seconds
+#     max_num_seqs=16
+#   No predictors — uses raw system metrics (same as training).
+#   Each (arrival_rate, budget) pair is a separate sweep with fixed budget
+#   (--budget-sweep), so all 500 items share the same budget.
+#   vLLM is drained between each config via _wait_for_vllm_drain().
 #
-# Part 2 arrival rates: [100, 150, 200] req/min
-# Budgets:              [10, 20, 30, 50, 70, 100, 150, 200] seconds
-# Test items:           1000
+#   Total: 6 rates × 8 budgets × 500 items = 24,000 episodes (48 sweeps)
 #
-# Total: 3 rates × 8 budgets × 1000 items = 24,000 episodes
-#
-# Output CSV:
-#   logs/paper_results/math/inframind_math_test_1000_poisson_part2.csv
-#
-# Combine with part1 CSV later:
-#   head -1 part1.csv > combined.csv
-#   tail -n+2 part1.csv >> combined.csv
-#   tail -n+2 part2.csv >> combined.csv
+#   Output CSV:
+#     logs/test/math/inframind_math_test.csv
+# =========================================================================
 
 echo "========================================="
 echo "Job ID: $SLURM_JOB_ID"
@@ -52,28 +52,28 @@ export TOKENIZERS_PARALLELISM="false"
 export CODE_EXECUTION_TIMEOUT="10"
 export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
 
+# Match training config: max_num_seqs=16
+export VLLM_MAX_NUM_SEQS=16
+
 # Ensure log directory exists
-mkdir -p logs/paper_results/math
+mkdir -p logs/test/math
 
-# ===== Run settings =====
-TEST_LIMIT=1000
+# ===== Run settings (matching training config) =====
+TEST_LIMIT=500
 CONCURRENCY=1000
-BUDGET_SWEEP="10,20,30,50,70,100,150,200"
-
-# Part 2: high arrival rates
-ARRIVAL_RATES_CSV="100,150,200"
+ARRIVAL_RATES_CSV="10,30,50,100,150,200"
+BUDGET_SWEEP="10,30,50,100,200,300,600,1000"
 ARRIVAL_PATTERN="poisson"
 
-# ===== Paths =====
-CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind/inframind_math.pt"
-LATENCY_PREDICTOR="${BLUE_STORAGE}/checkpoints/predictors/latency_estimator.pth"
-LENGTH_PREDICTOR="${BLUE_STORAGE}/checkpoints/predictors/length_estimator.pth"
+# ===== Paths (no predictors — raw system metrics, same as training) =====
+CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_math_20260223_113618_job25513733.pt"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost100.pth"
 
 # ===== Output =====
-OUTPUT_CSV="logs/paper_results/math/inframind_math_test_${TEST_LIMIT}_${ARRIVAL_PATTERN}_part2.csv"
+OUTPUT_CSV="logs/test/math/inframind_math_test.csv"
 
 # ===== Validation =====
-for f in "$CHECKPOINT" "$LATENCY_PREDICTOR" "$LENGTH_PREDICTOR"; do
+for f in "$CHECKPOINT" "$MAS_CHECKPOINT"; do
     if [[ ! -f "$f" ]]; then
         echo "ERROR: Required file not found: $f"
         exit 1
@@ -88,8 +88,6 @@ fi
 cleanup_vllm() {
     echo ""
     echo "Cleaning up vLLM servers..."
-
-    # Use job-specific log directory to avoid killing other jobs\' vLLM servers
     local vllm_log_dir="logs/vllm/job_${SLURM_JOB_ID}"
     if ls "${vllm_log_dir}"/*.pid >/dev/null 2>&1; then
         for pidfile in "${vllm_log_dir}"/*.pid; do
@@ -100,9 +98,7 @@ cleanup_vllm() {
                     echo "Stopping $name (PID $pid)"
                     kill -TERM "$pid" 2>/dev/null
                     sleep 2
-                    if kill -0 "$pid" 2>/dev/null; then
-                        kill -KILL "$pid" 2>/dev/null
-                    fi
+                    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
                 fi
                 rm -f "$pidfile"
             fi
@@ -113,33 +109,37 @@ cleanup_vllm() {
 trap cleanup_vllm EXIT INT TERM
 
 # ===== Start vLLM =====
-echo "Starting vLLM model pool..."
+echo "Starting vLLM model pool (VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS})..."
 bash scripts/vllm/serve_full_pool.sh || { echo "ERROR: Failed to start vLLM"; exit 1; }
 echo "vLLM servers ready!"
 bash scripts/check_vllm_status.sh
 echo ""
 
 echo "========================================="
-echo "InfraMind — MATH Test Sweep (Part 2)"
+echo "InfraMind — MATH Test Sweep"
 echo "========================================="
 echo "Checkpoint:      ${CHECKPOINT}"
-echo "Latency pred:    ${LATENCY_PREDICTOR}"
-echo "Length pred:      ${LENGTH_PREDICTOR}"
+echo "MAS planner:     ${MAS_CHECKPOINT}"
+echo "Predictors:      None (raw system metrics)"
 echo "Test limit:      ${TEST_LIMIT}"
 echo "Concurrency:     ${CONCURRENCY}"
 echo "Arrival rates:   ${ARRIVAL_RATES_CSV}"
 echo "Arrival pattern: ${ARRIVAL_PATTERN}"
 echo "Budget sweep:    ${BUDGET_SWEEP}"
+echo "Max-num-seqs:    ${VLLM_MAX_NUM_SEQS}"
+echo "Exec temperature: 0.7"
+echo "Plan temperature: 0.7"
 echo "Output CSV:      ${OUTPUT_CSV}"
 echo "========================================="
 echo ""
 
-set +e  # Don't exit on error; we want cleanup to run
+# Each (arrival_rate, budget) pair runs as a separate sweep with fixed budget.
+# The Python training loop handles the cross-product internally and drains
+# vLLM between each config via _wait_for_vllm_drain().
 
-# Each (arrival_rate × budget) combination runs sequentially inside the
-# Python training module's sweep loop.  --skip-training ensures no weight
-# updates; --deterministic uses argmax actions for reproducibility.
-python -m MAR.InfraMind.training \
+set +e
+
+python Experiments/train_inframind_math.py \
     --dataset math \
     --dataset-root "${MATH_DATASET_ROOT}" \
     --split test \
@@ -149,11 +149,12 @@ python -m MAR.InfraMind.training \
     --arrival-pattern "${ARRIVAL_PATTERN}" \
     --budget-sweep "${BUDGET_SWEEP}" \
     --concurrency "${CONCURRENCY}" \
-    --latency-predictor "${LATENCY_PREDICTOR}" \
-    --length-predictor "${LENGTH_PREDICTOR}" \
+    --mas-checkpoint "${MAS_CHECKPOINT}" \
     --checkpoint-path "${CHECKPOINT}" \
-    --deterministic \
+    --resume-checkpoint \
     --skip-training \
+    --executor-temperature 0.7 \
+    --planner-temperature 0.7 \
     --telemetry-csv "${OUTPUT_CSV}"
 
 INFRAMIND_EXIT=$?
@@ -161,8 +162,9 @@ INFRAMIND_EXIT=$?
 set -e
 
 # ===== Summary =====
+echo ""
 echo "========================================="
-echo "InfraMind Part 2 Complete"
+echo "InfraMind Test Sweep Complete"
 echo "========================================="
 echo "Output CSV:  ${OUTPUT_CSV}"
 echo "Exit status: ${INFRAMIND_EXIT}"

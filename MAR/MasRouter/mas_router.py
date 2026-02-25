@@ -96,7 +96,7 @@ class MasRouter(nn.Module):
         self.device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.text_encoder = SentenceEncoder(device=self.device)
         self.task_classifier = TaskClassifier(input_dim = in_dim, hidden_dim=hidden_dim, device=self.device,temp=temp)
-        self.collab_determiner = CollabDeterminer(input_dim = in_dim, context_input_dim = in_dim , hidden_dim = hidden_dim,device=self.device,temp=0.8)
+        self.collab_determiner = CollabDeterminer(input_dim = in_dim, context_input_dim = in_dim , hidden_dim = hidden_dim,device=self.device,temp=0.7)
         self.num_determiner = NumDeterminer(input_dim = in_dim, hidden_dim=hidden_dim,max_agent=max_agent, device=self.device)
         self.role_allocation = RoleAllocation(input_dim = in_dim, context_input_dim = 2* hidden_dim, hidden_dim=hidden_dim,device=self.device,temp=temp)
         self.llm_router = LLMRouter(device=self.device,max_agent=max_agent,temp=1.0)

@@ -39,7 +39,6 @@ class InfraMindGraph(Graph):
         deterministic: bool = False,
         max_tries: int = 3,
         router_lock: Optional[threading.Lock] = None,
-        system_state_vector: Optional[torch.Tensor] = None,
         trace: Optional[GraphTrace] = None,
         arrival_time: Optional[float] = None,
         dry_run: bool = False,
@@ -114,30 +113,14 @@ class InfraMindGraph(Graph):
             if router_lock:
                 with router_lock:
                     role_embedding = router.encode_role(role_name)
-                    state_vector = system_state_vector
-                    if state_vector is None:
-                        state_vector = router.get_system_state_vector(
-                            query_embedding.dtype,
-                            query_text=query_text,
-                            role_name=role_name,
-                            query_embedding=query_embedding,
-                        )
                     exec_state = router.assemble_executor_state(
-                        query_embedding, role_embedding, budget_remaining, state_vector
+                        query_embedding, role_embedding, budget_remaining
                     )
                     exec_action = router.get_executor_action(exec_state, deterministic=deterministic)
             else:
                 role_embedding = router.encode_role(role_name)
-                state_vector = system_state_vector
-                if state_vector is None:
-                    state_vector = router.get_system_state_vector(
-                        query_embedding.dtype,
-                        query_text=query_text,
-                        role_name=role_name,
-                        query_embedding=query_embedding,
-                    )
                 exec_state = router.assemble_executor_state(
-                    query_embedding, role_embedding, budget_remaining, state_vector
+                    query_embedding, role_embedding, budget_remaining
                 )
                 exec_action = router.get_executor_action(exec_state, deterministic=deterministic)
             model_idx = int(exec_action["model_index"].item())

@@ -562,6 +562,20 @@ if __name__ == '__main__':
                 total_executed = total_executed + 1
                 utility = is_solved - cost * args.cost_rate
 
+                # Update tracker with quality/latency for log_stats summary
+                models_used = [s.get("llm_name", "") for s in transitions if s.get("llm_name")]
+                strategies_used = [s.get("strategy_name", "") for s in transitions if s.get("strategy_name")]
+                topo_name = payload.get("reasoning_name", "")
+                test_progress.total_quality += float(is_solved)
+                test_progress.total_latency += w_latency
+                for m in models_used:
+                    test_progress.model_counts[m] += 1
+                if topo_name:
+                    test_progress.topology_counts[topo_name] += 1
+                for s in strategies_used:
+                    if s:
+                        test_progress.strategy_counts[s] += 1
+
                 csv_rows = []
                 csv_rows.append({
                     "run_id": current_time,

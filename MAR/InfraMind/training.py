@@ -64,6 +64,9 @@ INFRAMIND_CSV_FIELDS: Sequence[str] = (
     "llm_e2e_avg",
     "llm_queue_avg",
     "llm_inference_avg",
+    "lambda_lag",
+    "warmup_active",
+    "cost_ratio",
 )
 
 
@@ -98,6 +101,7 @@ def _save_checkpoint(
         "router_state_dict": router.state_dict(),
         "planner_optimizer_state_dict": trainer.planner_optimizer.state_dict(),
         "executor_optimizer_state_dict": trainer.executor_optimizer.state_dict(),
+        "lambda_lag": trainer.lambda_lag,
         "args": vars(args),
     }
     torch.save(payload, path)
@@ -140,37 +144,46 @@ def _episode_has_agent_errors(episode: Dict[str, Any]) -> bool:
 CIRCUIT_BREAKER_FAILURE_RATE = 0.30  # skip training if >30% episodes failed
 
 
-def _wait_for_vllm_drain(timeout: float = 60.0, poll_interval: float = 2.0) -> bool:
-    """Wait until all vLLM servers have zero running+waiting requests.
+def _wait_for_vllm_drain(poll_interval: float = 5.0) -> bool:
+    """Wait until ALL vLLM servers have zero running+waiting requests.
 
-    Returns True if drained within timeout, False otherwise.
-    This prevents leftover requests from a high-load sweep from polluting
-    the next sweep's latency measurements and causing cascade failures.
+    Blocks indefinitely — no timeout. Every sweep must start with a
+    completely clean queue, otherwise leftover requests from a high-load
+    sweep corrupt latency measurements and poison the RL training signal.
+
+    Logs progress every 30 seconds so the user can see the drain happening.
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    start = time.time()
+    last_log = 0.0  # time of last progress log
+    log_interval = 30.0  # log every 30s
+
+    while True:
+        per_model: Dict[str, tuple] = {}
         total_active = 0
         for model_name, snap in global_model_metrics.items():
             running = snap.get("num_requests_running", 0.0)
             waiting = snap.get("num_requests_waiting", 0.0)
-            total_active += running + waiting
+            active = running + waiting
+            total_active += active
+            if active > 0:
+                per_model[model_name] = (int(running), int(waiting))
+
         if total_active == 0:
+            elapsed = time.time() - start
+            if elapsed > 5.0:
+                logger.info("[Drain] All queues empty after {:.0f}s", elapsed)
             return True
-        logger.debug(
-            "[Drain] Waiting for vLLM queues to clear: {} active requests remaining",
-            int(total_active),
-        )
-        time.sleep(poll_interval)
-    # Log which servers still have active requests
-    for model_name, snap in global_model_metrics.items():
-        running = snap.get("num_requests_running", 0.0)
-        waiting = snap.get("num_requests_waiting", 0.0)
-        if running + waiting > 0:
-            logger.warning(
-                "[Drain] {} still has {} running + {} waiting after {}s timeout",
-                model_name, int(running), int(waiting), timeout,
+
+        elapsed = time.time() - start
+        if elapsed - last_log >= log_interval:
+            parts = [f"{m}: {r}r+{w}w" for m, (r, w) in per_model.items()]
+            logger.info(
+                "[Drain] Waiting for queues to clear ({:.0f}s elapsed, {} active): {}",
+                elapsed, int(total_active), ", ".join(parts),
             )
-    return False
+            last_log = elapsed
+
+        time.sleep(poll_interval)
 
 
 def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
@@ -211,8 +224,12 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
     parser.add_argument("--prompt-file", type=str, default="", help="Override FinalNode prompt file.")
     parser.add_argument("--limit", type=int, default=50, help="Number of items to train on.")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs over the slice.")
-    parser.add_argument("--request-timeout", type=float, default=1800.0, help="Per-request timeout in seconds (30 min, matches baseline).")
+    parser.add_argument("--request-timeout", type=float, default=3600.0, help="Per-request timeout in seconds (1 hour, accommodates deep queues).")
     parser.add_argument("--deterministic", action="store_true", help="Use argmax actions instead of sampling.")
+    parser.add_argument("--executor-temperature", type=float, default=1.0,
+                        help="Temperature for executor softmax at inference. <1.0 = sharper, >1.0 = softer. Only affects sampling, not training.")
+    parser.add_argument("--planner-temperature", type=float, default=1.0,
+                        help="Temperature for planner (collab determiner + role allocation) at inference. <1.0 = sharper.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--log-episodes", type=int, default=1, help="Episodes to log per epoch.")
     parser.add_argument("--arrival-rate", type=float, default=0.0, help="Arrival rate (req/min). 0 disables shooting.")
@@ -299,18 +316,25 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
         help="Path to quality predictor checkpoint (Phase 2 training with predicted quality).",
     )
     parser.add_argument(
+        "--budget-tiers",
+        type=str,
+        default="",
+        help="Comma-separated fixed budget tiers in seconds, e.g. '10,50,200,600,1800'. "
+        "Each episode randomly samples one tier (equal probability). "
+        "Overrides --budget-min/--budget-max and --budget-sweep.",
+    )
+    parser.add_argument(
         "--budget-min",
         type=float,
         default=0.0,
-        help="Minimum budget for LogUniform per-item randomization. "
-        "When both --budget-min and --budget-max are set, each item "
-        "samples budget ~ LogUniform(min, max). Overrides --budget-sweep.",
+        help="Minimum budget for LogUniform per-item randomization (legacy). "
+        "Prefer --budget-tiers for fixed budget tiers.",
     )
     parser.add_argument(
         "--budget-max",
         type=float,
         default=0.0,
-        help="Maximum budget for LogUniform per-item randomization.",
+        help="Maximum budget for LogUniform per-item randomization (legacy).",
     )
     parser.add_argument(
         "--val-limit",
@@ -341,46 +365,88 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
         default=0.5,
         help="LR reduction factor.",
     )
+    # PPO-Lagrangian hyperparameters
+    parser.add_argument(
+        "--ppo-epochs",
+        type=int,
+        default=3,
+        help="Number of PPO update epochs per batch.",
+    )
+    parser.add_argument(
+        "--ppo-clip",
+        type=float,
+        default=0.2,
+        help="PPO clipping epsilon.",
+    )
+    parser.add_argument(
+        "--lambda-init",
+        type=float,
+        default=0.05,
+        help="Initial Lagrange multiplier for budget constraint.",
+    )
+    parser.add_argument(
+        "--lr-lambda",
+        type=float,
+        default=0.001,
+        help="Learning rate for Lagrange multiplier dual update.",
+    )
+    parser.add_argument(
+        "--lambda-max",
+        type=float,
+        default=1.0,
+        help="Maximum value for Lagrange multiplier.",
+    )
+    parser.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=0,
+        help="Hold λ=0 for this many epochs so policy learns quality first (0=disabled).",
+    )
     return parser
 
 
-def _get_val_budget(sweep_budgets: List[float], budget_provider: Optional[BudgetProvider]) -> float:
-    """Return a sensible budget for validation runs."""
-    if sweep_budgets:
-        return sweep_budgets[-1]
-    return 60.0
+_VAL_BUDGET = 200.0      # Default validation budget (should match a training tier)
+_VAL_ARRIVAL_RATE = 100  # Fixed arrival rate (req/min) for validation
 
 
-# Validation budget scenarios for budget-awareness checking.
-# (label, budget_seconds)  — kept small so validation is fast.
-_VAL_SCENARIOS = [
-    ("tight", 20.0),
-    ("loose", 120.0),
-]
-
-# Composite score weights: accuracy is king, but latency efficiency matters.
-# composite = accuracy_weight * solve_rate + efficiency_weight * budget_efficiency
-_VAL_ACCURACY_WEIGHT = 0.80
-_VAL_EFFICIENCY_WEIGHT = 0.20
-
-
-def _run_validation_pass(
+def _run_validation(
     env: InfraMindEnv,
     router: InfraMindRouter,
     val_data: List[InfraMindSample],
     adapter: Any,
-    budget: float,
-    label: str,
+    concurrency: int = 1000,
+    dry_run: bool = False,
+    budget: Optional[float] = None,
+    arrival_rate: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Run a single deterministic validation pass at a given budget."""
-    solved = 0
-    total = 0
-    latencies: List[float] = []
-    budget_violations = 0
-    with torch.no_grad():
-        for sample in val_data:
-            try:
-                episode = env.step(
+    """Run a single concurrent validation pass.
+
+    Uses RequestShooter (same mechanism as training) for concurrent execution
+    instead of sequential episode loops. Deterministic actions, no training.
+
+    Returns solve_rate-based composite score for best-model selection and
+    early stopping.
+    """
+    budget = budget if budget is not None else _VAL_BUDGET
+    arrival_rate = arrival_rate if arrival_rate is not None else _VAL_ARRIVAL_RATE
+
+    router.eval()
+    try:
+        solved = 0
+        total = 0
+        latencies: List[float] = []
+        budget_violations = 0
+        _lock = threading.Lock()
+
+        progress = ProgressTracker(
+            total=len(val_data),
+            phase=f"Validation budget={budget:.0f}s rate={arrival_rate}",
+            log_interval=max(1, len(val_data) // 10),
+        )
+
+        def _val_handler(sample: InfraMindSample) -> Dict[str, Any]:
+            with torch.no_grad():
+                return env.step(
                     query=sample.query,
                     tests=sample.tests,
                     deterministic=True,
@@ -390,84 +456,73 @@ def _run_validation_pass(
                     sample=sample,
                     budget_total=budget,
                 )
-            except Exception as exc:
-                logger.warning("Validation [{}] episode failed: {}", label, exc)
+
+        def _val_on_result(res: RequestResult) -> None:
+            nonlocal solved, total, budget_violations
+            if not res.success or res.output is None:
+                logger.warning("Validation episode {} failed: {}", res.index, res.error)
+                with _lock:
+                    total += 1
+                progress.update(success=False)
+                return
+            episode = res.output
+            with _lock:
                 total += 1
-                continue
-            total += 1
-            if episode.get("quality_is_solved"):
-                solved += 1
-            lat = episode.get("workflow_latency_seconds", 0.0)
-            latencies.append(lat)
-            if lat > budget:
-                budget_violations += 1
-    solve_rate = solved / max(total, 1)
-    avg_latency = sum(latencies) / max(len(latencies), 1) if latencies else 0.0
-    slo_compliance = 1.0 - (budget_violations / max(total, 1))
-    # Budget efficiency: fraction of budget used on average (lower = more efficient)
-    budget_efficiency = 1.0 - min(1.0, avg_latency / budget) if budget > 0 else 0.0
-    return {
-        "label": label,
-        "budget": budget,
-        "solve_rate": solve_rate,
-        "solved": solved,
-        "total": total,
-        "avg_latency": avg_latency,
-        "slo_compliance": slo_compliance,
-        "budget_violations": budget_violations,
-        "budget_efficiency": budget_efficiency,
-    }
+                if episode.get("quality_is_solved"):
+                    solved += 1
+                lat = episode.get("workflow_latency_seconds", 0.0)
+                latencies.append(lat)
+                if lat > budget:
+                    budget_violations += 1
 
-
-def _run_validation(
-    env: InfraMindEnv,
-    router: InfraMindRouter,
-    val_data: List[InfraMindSample],
-    adapter: Any,
-    val_budget: float,
-) -> Dict[str, Any]:
-    """Run multi-scenario validation: tight + loose budget passes.
-
-    Returns composite metrics combining accuracy and budget awareness.
-    The composite_score is used for best-model selection and early stopping.
-    """
-    router.eval()
-    try:
-        passes: List[Dict[str, Any]] = []
-        for label, budget in _VAL_SCENARIOS:
-            # Drain vLLM between passes so they don't interfere
-            if passes and not env.dry_run:
-                _wait_for_vllm_drain(timeout=30.0)
-            result = _run_validation_pass(env, router, val_data, adapter, budget, label)
-            passes.append(result)
-            logger.info(
-                "  VAL [{}] budget={:.0f}s solve_rate={:.4f} ({}/{}) "
-                "avg_latency={:.3f}s slo_compliance={:.2f}%",
-                label, budget, result["solve_rate"], result["solved"],
-                result["total"], result["avg_latency"],
-                result["slo_compliance"] * 100,
+            models_used = [s.get("model", "") for s in episode.get("executor_transitions", []) if s.get("model")]
+            strategies_used = [s.get("strategy", "") for s in episode.get("executor_transitions", []) if s.get("strategy")]
+            progress.update(
+                success=True,
+                models=models_used,
+                topology=episode.get("topology", ""),
+                strategies=strategies_used,
+                latency=episode.get("workflow_latency_seconds", 0.0),
+                quality=episode.get("quality", 0.0),
             )
+
+        pattern = RequestPattern(
+            pattern="poisson",
+            rate=arrival_rate,
+            seed=42,
+        )
+        shooter = RequestShooter(
+            pattern,
+            max_concurrency=concurrency,
+            capture_output=True,
+            collect_results=True,
+            on_result=_val_on_result,
+        )
+        shooter.run(
+            val_data,
+            handler=_val_handler,
+            item_id_fn=lambda sample, idx: str(sample.item_id),
+        )
+
+        progress.log_final_summary()
+
     finally:
         router.train()
 
-    # Aggregate: average solve_rate and budget_efficiency across scenarios
-    avg_solve_rate = sum(p["solve_rate"] for p in passes) / len(passes)
-    avg_efficiency = sum(p["budget_efficiency"] for p in passes) / len(passes)
-    avg_slo = sum(p["slo_compliance"] for p in passes) / len(passes)
-    avg_latency = sum(p["avg_latency"] for p in passes) / len(passes)
+    solve_rate = solved / max(total, 1)
+    avg_latency = sum(latencies) / max(len(latencies), 1) if latencies else 0.0
+    slo_compliance = 1.0 - (budget_violations / max(total, 1))
 
-    # Composite score for best-model selection
-    composite = _VAL_ACCURACY_WEIGHT * avg_solve_rate + _VAL_EFFICIENCY_WEIGHT * avg_efficiency
+    # Composite score: solve_rate is the primary metric
+    composite = solve_rate
 
     return {
-        "val_solve_rate": avg_solve_rate,
-        "val_solved": sum(p["solved"] for p in passes),
-        "val_total": sum(p["total"] for p in passes),
+        "val_solve_rate": solve_rate,
+        "val_solved": solved,
+        "val_total": total,
         "val_avg_latency": avg_latency,
-        "val_slo_compliance": avg_slo,
-        "val_budget_efficiency": avg_efficiency,
+        "val_slo_compliance": slo_compliance,
         "val_composite_score": composite,
-        "val_passes": passes,
     }
 
 
@@ -481,6 +536,8 @@ def main(default_dataset: str = "mbpp") -> None:
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     dataset_path = args.dataset_path.strip() or None
     train_path = args.train_path.strip() or None
@@ -520,6 +577,15 @@ def main(default_dataset: str = "mbpp") -> None:
     if getattr(args, "random_exploration", False):
         router.random_exploration = True
 
+    # Set executor temperature for inference sampling
+    router.executor_temperature = getattr(args, "executor_temperature", 1.0)
+
+    # Set planner temperature for inference sampling (topology selection only)
+    planner_temp = getattr(args, "planner_temperature", 1.0)
+    if planner_temp != 1.0:
+        router.collab_determiner.temp = planner_temp
+        logger.info("Planner collab temperature set to {:.2f}", planner_temp)
+
     env = InfraMindEnv(
         router=router,
         prompt_file=prompt_file,
@@ -531,7 +597,19 @@ def main(default_dataset: str = "mbpp") -> None:
     # Map role_domain to task classifier label index
     _DOMAIN_TASK_INDEX = {"Math": 0, "Commonsense": 1, "Code": 2}
     task_label = _DOMAIN_TASK_INDEX.get(role_domain, 0)
-    trainer = InfraMindTrainer(router)
+
+    warmup_epochs = getattr(args, "warmup_epochs", 3)
+    trainer = InfraMindTrainer(
+        router,
+        ppo_epochs=getattr(args, "ppo_epochs", 3),
+        ppo_clip=getattr(args, "ppo_clip", 0.2),
+        lambda_init=getattr(args, "lambda_init", 0.0),
+        lr_lambda=getattr(args, "lr_lambda", 0.001),
+        lambda_max=getattr(args, "lambda_max", 1.0),
+        warmup_epochs=warmup_epochs,
+    )
+    logger.info("λ warmup: {} epochs (λ=0 → quality-only), then dual update with λ_max={:.1f}, lr_λ={:.4f}",
+                warmup_epochs, getattr(args, "lambda_max", 1.0), getattr(args, "lr_lambda", 0.001))
 
     checkpoint_path = args.checkpoint_path.strip() or ""
     resume_checkpoint = args.resume_checkpoint
@@ -545,10 +623,19 @@ def main(default_dataset: str = "mbpp") -> None:
             trainer.planner_optimizer.load_state_dict(planner_state)
         if executor_state:
             trainer.executor_optimizer.load_state_dict(executor_state)
-        logger.info("Resumed InfraMind checkpoint from {}", checkpoint_path)
+        if "lambda_lag" in payload:
+            trainer.lambda_lag = payload["lambda_lag"]
+            logger.info("Restored lambda_lag={:.4f}", trainer.lambda_lag)
+        start_epoch = payload.get("epoch", -1) + 1  # resume from NEXT epoch
+        if args.skip_training:
+            # Inference-only: ignore checkpoint epoch, run exactly one pass
+            start_epoch = 0
+            args.epochs = max(args.epochs, 1)
+        logger.info("Resumed InfraMind checkpoint from {} (will start at epoch {})", checkpoint_path, start_epoch)
         # Clear so new saves go to a fresh file (with new job ID)
         checkpoint_path = ""
     else:
+        start_epoch = 0
         # Fresh training — load MAS planner weights as initialization
         mas_checkpoint = args.mas_checkpoint.strip() if hasattr(args, "mas_checkpoint") else ""
         if mas_checkpoint and os.path.isfile(mas_checkpoint):
@@ -579,12 +666,21 @@ def main(default_dataset: str = "mbpp") -> None:
     sweep_patterns = _parse_str_list(args.arrival_patterns) if args.arrival_patterns else [args.arrival_pattern]
     sweep_budgets = _parse_float_list(args.budget_sweep) if args.budget_sweep else []
 
-    # Budget randomization mode: LogUniform(min, max) per item
+    # Budget mode priority: --budget-tiers > --budget-min/max > --budget-sweep
+    budget_tiers_raw = getattr(args, "budget_tiers", "") or ""
+    budget_tiers: List[float] = _parse_float_list(budget_tiers_raw) if budget_tiers_raw.strip() else []
     budget_min = getattr(args, "budget_min", 0.0)
     budget_max = getattr(args, "budget_max", 0.0)
-    use_random_budget = budget_min > 0.0 and budget_max > 0.0 and budget_max > budget_min
-    if use_random_budget:
-        # Single config per (rate, pattern); budget sampled per item
+    use_budget_tiers = len(budget_tiers) >= 2
+    use_random_budget = (not use_budget_tiers) and budget_min > 0.0 and budget_max > 0.0 and budget_max > budget_min
+
+    if use_budget_tiers:
+        # Fixed budget tiers: each episode randomly picks one (equal probability)
+        sweep_configs = [(rate, pattern, 0.0) for rate in sweep_rates for pattern in sweep_patterns]
+        logger.info("Budget tiers: {} ({} configs per outer epoch)",
+                     budget_tiers, len(sweep_configs))
+    elif use_random_budget:
+        # Legacy: LogUniform(min, max) per item
         sweep_configs = [(rate, pattern, 0.0) for rate in sweep_rates for pattern in sweep_patterns]
         logger.info("Budget randomization: LogUniform({:.0f}, {:.0f}) per item, {} configs",
                      budget_min, budget_max, len(sweep_configs))
@@ -609,18 +705,21 @@ def main(default_dataset: str = "mbpp") -> None:
     best_val_solve_rate = -1.0
     epochs_without_improvement = 0
     patience = getattr(args, "patience", 5)
-    val_budget = _get_val_budget(sweep_budgets, budget_provider)
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         random.shuffle(sweep_configs)
         for sweep_idx, (arrival_rate, arrival_pattern, sweep_budget) in enumerate(sweep_configs):
-            # ---- Inter-sweep cooldown: wait for vLLM queues to drain ----
+            # ---- Inter-sweep cooldown: wait for ALL vLLM queues to fully drain ----
             if sweep_idx > 0 and not env.dry_run:
-                logger.info("[Sweep {}/{}] Waiting for vLLM queues to drain before rate={}...",
+                logger.info("[Sweep {}/{}] Draining vLLM queues before rate={}...",
                             sweep_idx + 1, len(sweep_configs), arrival_rate)
-                drained = _wait_for_vllm_drain(timeout=60.0)
-                if not drained:
-                    logger.warning("[Sweep] vLLM queues did not fully drain; proceeding anyway")
+                _wait_for_vllm_drain()
+
+            # Update trainer epoch for λ warmup tracking
+            # Use outer `epoch` (not global_epoch) so warmup covers full outer epochs.
+            # global_epoch increments per sweep (4× per outer epoch with 4 arrival rates),
+            # so warmup_epochs=3 would only last 0.75 outer epochs if we used global_epoch.
+            trainer.set_epoch(epoch)
 
             planner_transitions: List[Dict[str, Any]] = []
             executor_transitions: List[Dict[str, Any]] = []
@@ -631,7 +730,9 @@ def main(default_dataset: str = "mbpp") -> None:
             use_shooter = arrival_rate > 0.0 or args.concurrency > 1
 
             # Initialize progress tracker for this epoch
-            if use_random_budget:
+            if use_budget_tiers:
+                budget_tag = f" budget=tiers({','.join(str(int(t)) for t in budget_tiers)})"
+            elif use_random_budget:
                 budget_tag = f" budget=LogU({budget_min:.0f},{budget_max:.0f})"
             elif sweep_budget > 0.0:
                 budget_tag = f" budget={sweep_budget:.0f}s"
@@ -691,6 +792,11 @@ def main(default_dataset: str = "mbpp") -> None:
                     episode_counter += 1
                     quality_pred = episode.get("quality_pred")
                     quality_gold = episode.get("quality_gold") or answer
+                    # Debug columns
+                    _ep_budget = float(episode["budget_total"]) or 1.0
+                    _ep_latency = float(episode["workflow_latency_seconds"])
+                    _ep_cost_ratio = _ep_latency / max(_ep_budget, 1e-3)
+
                     csv_rows: List[Dict[str, Any]] = [
                         {
                             "run_id": run_id,
@@ -714,11 +820,16 @@ def main(default_dataset: str = "mbpp") -> None:
                             "completion_tokens": episode["token_counts"].get("completion_tokens", 0),
                             "total_tokens": episode["token_counts"].get("total_tokens", 0),
                             "query": query,
+                            "lambda_lag": trainer.lambda_lag,
+                            "warmup_active": int(trainer.warmup_active),
+                            "cost_ratio": _ep_cost_ratio,
                         }
                     ]
 
                     for step in episode["executor_transitions"]:
                         token_counts = step.get("token_counts", {})
+                        _step_lat = float(step.get("latency_seconds", 0.0))
+                        _step_cost_ratio = _step_lat / max(_ep_budget, 1e-3)
                         csv_rows.append(
                             {
                                 "run_id": run_id,
@@ -742,7 +853,7 @@ def main(default_dataset: str = "mbpp") -> None:
                                 "step_index": step.get("step_index", 0),
                                 "model_name": step.get("model", ""),
                                 "strategy_name": step.get("strategy", ""),
-                                "latency_seconds": step.get("latency_seconds", 0.0),
+                                "latency_seconds": _step_lat,
                                 "budget_remaining": step.get("budget_remaining", 0.0),
                                 "budget_total": episode["budget_total"],
                                 "round_index": step.get("round_index", 0),
@@ -760,6 +871,9 @@ def main(default_dataset: str = "mbpp") -> None:
                                 "prompt_tokens": token_counts.get("prompt_tokens", 0),
                                 "completion_tokens": token_counts.get("completion_tokens", 0),
                                 "total_tokens": token_counts.get("total_tokens", 0),
+                                "lambda_lag": trainer.lambda_lag,
+                                "warmup_active": int(trainer.warmup_active),
+                                "cost_ratio": _step_cost_ratio,
                             }
                         )
                     telemetry_writer.append_rows(csv_rows)
@@ -770,7 +884,7 @@ def main(default_dataset: str = "mbpp") -> None:
                             args.checkpoint_dir,
                             router,
                             trainer,
-                            global_epoch,
+                            epoch,  # outer epoch (not global_epoch) so resume starts at correct outer epoch
                             run_id,
                             args,
                             adapter.dataset_name,
@@ -790,20 +904,35 @@ def main(default_dataset: str = "mbpp") -> None:
                         quality=episode.get("quality", 0.0),
                     )
 
-            # Pre-assign budgets: same budget for each training batch block
-            # so advantage normalization compares items at the same budget level.
-            batch_size = args.training_batch_size
-            if use_random_budget:
-                item_budgets: Dict[int, float] = {}
+            # Pre-assign budgets per item.
+            # Budget tiers: each item randomly picks one fixed tier (equal probability).
+            # LogUniform (legacy): stratified quartile cycling per batch block.
+            item_budgets: Dict[int, float] = {}
+            if use_budget_tiers:
+                for i in range(len(data)):
+                    item_budgets[i] = random.choice(budget_tiers)
+            elif use_random_budget:
+                batch_size = args.training_batch_size
+                log_min = math.log(budget_min)
+                log_max = math.log(budget_max)
+                log_range = log_max - log_min
+                n_quartiles = 4
+                quartile_width = log_range / n_quartiles
+                block_idx = 0
+                quartile_offset = random.randint(0, n_quartiles - 1)
                 for block_start in range(0, len(data), batch_size):
-                    log_b = random.uniform(math.log(budget_min), math.log(budget_max))
+                    q = (block_idx + quartile_offset) % n_quartiles
+                    q_lo = log_min + q * quartile_width
+                    q_hi = q_lo + quartile_width
+                    log_b = random.uniform(q_lo, q_hi)
                     block_budget = math.exp(log_b)
                     block_end = min(block_start + batch_size, len(data))
                     for i in range(block_start, block_end):
                         item_budgets[i] = block_budget
+                    block_idx += 1
 
             def _get_budget(sample: InfraMindSample, sample_idx: int = 0) -> float:
-                if use_random_budget:
+                if use_budget_tiers or use_random_budget:
                     return item_budgets.get(sample_idx, 60.0)
                 if sweep_budget > 0.0:
                     return sweep_budget
@@ -916,8 +1045,8 @@ def main(default_dataset: str = "mbpp") -> None:
                 # Still increment global epoch and drain vLLM before next sweep
                 global_epoch += 1
                 if not env.dry_run:
-                    logger.info("[Cooldown] Waiting for vLLM queues to drain after circuit breaker...")
-                    _wait_for_vllm_drain(timeout=90.0)
+                    logger.info("[Cooldown] Draining vLLM queues after circuit breaker...")
+                    _wait_for_vllm_drain()
                 continue
 
             # Train on any remaining transitions (last partial batch)
@@ -930,7 +1059,9 @@ def main(default_dataset: str = "mbpp") -> None:
 
             avg_quality = sum(workflow_qualities) / max(len(workflow_qualities), 1) if workflow_qualities else 0.0
             avg_latency = sum(workflow_latencies) / max(len(workflow_latencies), 1) if workflow_latencies else 0.0
-            if use_random_budget:
+            if use_budget_tiers:
+                budget_label = f"tiers({','.join(str(int(t)) for t in budget_tiers)})"
+            elif use_random_budget:
                 budget_label = f"LogU({budget_min:.0f},{budget_max:.0f})"
             elif sweep_budget > 0.0:
                 budget_label = f"{sweep_budget:.0f}s"
@@ -955,7 +1086,7 @@ def main(default_dataset: str = "mbpp") -> None:
                     " executor_loss={:.4f}"
                     " avg_quality={:.4f} avg_latency={:.3f}s"
                     " cost_ratio={:.3f} constraint_gap={:.3f}"
-                    " e_entropy={:.3f}",
+                    " e_entropy={:.3f} λ={:.4f} mean_cost={:.3f}",
                     global_epoch,
                     sweep_idx + 1,
                     len(sweep_configs),
@@ -970,6 +1101,8 @@ def main(default_dataset: str = "mbpp") -> None:
                     metrics.get("cost_ratio", 0.0),
                     metrics.get("constraint_gap", 0.0),
                     metrics.get("executor_entropy", 0.0),
+                    metrics.get("lambda", 0.0),
+                    metrics.get("mean_cost", 0.0),
                 )
                 saved_path = _save_checkpoint(
                     checkpoint_path or None,
@@ -989,20 +1122,24 @@ def main(default_dataset: str = "mbpp") -> None:
         if val_data and not args.skip_training:
             # Drain vLLM before validation so it starts clean
             if not env.dry_run:
-                _wait_for_vllm_drain(timeout=60.0)
+                _wait_for_vllm_drain()
 
+            # Use median training budget tier for validation (or default)
+            val_budget = sorted(budget_tiers)[len(budget_tiers) // 2] if use_budget_tiers else _VAL_BUDGET
             val_metrics = _run_validation(
-                env, router, val_data, adapter, val_budget,
+                env, router, val_data, adapter,
+                concurrency=args.concurrency,
+                dry_run=env.dry_run,
+                budget=val_budget,
             )
             val_sr = val_metrics["val_solve_rate"]
             val_composite = val_metrics["val_composite_score"]
             logger.info(
                 "VALIDATION epoch={} solve_rate={:.4f} ({}/{}) avg_latency={:.3f}s "
-                "slo_compliance={:.2f}% efficiency={:.2f}% composite={:.4f}",
+                "slo_compliance={:.2f}% composite={:.4f}",
                 epoch, val_sr, val_metrics["val_solved"], val_metrics["val_total"],
                 val_metrics["val_avg_latency"],
                 val_metrics["val_slo_compliance"] * 100,
-                val_metrics["val_budget_efficiency"] * 100,
                 val_composite,
             )
 
@@ -1025,11 +1162,11 @@ def main(default_dataset: str = "mbpp") -> None:
                     "router_state_dict": router.state_dict(),
                     "planner_optimizer_state_dict": trainer.planner_optimizer.state_dict(),
                     "executor_optimizer_state_dict": trainer.executor_optimizer.state_dict(),
+                    "lambda_lag": trainer.lambda_lag,
                     "val_solve_rate": val_sr,
                     "val_composite_score": val_composite,
                     "val_slo_compliance": val_metrics["val_slo_compliance"],
-                    "val_budget_efficiency": val_metrics["val_budget_efficiency"],
-                    "val_passes": val_metrics["val_passes"],
+                    "val_avg_latency": val_metrics["val_avg_latency"],
                     "args": vars(args),
                 }
                 torch.save(payload, best_path)

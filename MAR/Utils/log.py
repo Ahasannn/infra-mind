@@ -159,7 +159,6 @@ def configure_logging(print_level: str = "INFO", logfile_level: str = "DEBUG", l
     """
     logger.remove()
     logger.add(sys.stderr, level=print_level)
-    logger.add(MAR_ROOT /f'logs/{log_name}', level=logfile_level)
 
 def initialize_log_file(experiment_name: str, time_stamp: str) -> Path:
     """
