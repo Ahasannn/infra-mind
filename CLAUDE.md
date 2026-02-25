@@ -67,7 +67,7 @@ python Experiments/run_mmlu.py              # MMLU dataset
 sbatch scripts/baseline_train/submit_mas_train_mbpp.slurm
 sbatch scripts/baseline_train/submit_mas_train_gsm8k.slurm
 sbatch scripts/baseline_train/submit_mas_train_humaneval.slurm
-sbatch scripts/baseline_train/submit_mas_train_math.slurm
+sbatch scripts/baseline_train/math/train_mas_math.slurm
 sbatch scripts/baseline_train/submit_mas_train_mmlu.slurm
 ```
 
@@ -107,6 +107,9 @@ Infrastructure-aware routing using hierarchical CMDP:
     - Query embedding + Role embedding
     - Remaining budget (adapts model/strategy choice to time pressure)
     - System metrics (queue depth, cache usage, predicted latencies per model×strategy)
+  - **Joint action space**: Single head with 5×3=15 logits (one per model×strategy combination).
+    Decoding: `model_idx = joint_idx // 3`, `strategy_idx = joint_idx % 3`.
+    This captures model-strategy correlations (e.g., DeepThink best with large models, Flash best with small).
   - Clean separation: planner decides WHAT reasoning structure to use, executor decides HOW to execute it cheaply.
 
 - **metrics_watcher.py**: Real-time vLLM infrastructure monitoring
@@ -115,12 +118,19 @@ Infrastructure-aware routing using hierarchical CMDP:
   - Maintains sliding window of historical metrics
   - Provides state representation for executor
 
-- **training.py**: Two-level training loop:
-  - Planner: REINFORCE with normalized advantages, correct → [0.50, 1.0], wrong → [-1.0, -0.7] (effort mandate)
-  - Executor: Actor-Critic with quality predictor shaping on wrong answers for dense credit assignment
-  - Correct ALWAYS outranks wrong (min gap 1.20). Effort mandate: wrong+tried_hard > wrong+gave_up
+- **trainer.py**: PPO-Lagrangian training:
+  - Shared Lagrange multiplier λ between planner and executor for budget constraint
+  - Executor: PPO clipped surrogate (K=3, ε=0.2), reward = quality - λ * cost
+  - Planner: REINFORCE + shared λ, utility = quality - λ * cost
+  - Dual update: λ increases when over budget, decreases when within budget
+  - No quality predictor, no hand-tuned reward coefficients
+  - CLI args: `--ppo-epochs`, `--ppo-clip`, `--lambda-init`, `--lr-lambda`, `--lambda-max`
+
+- **training.py**: Training loop orchestration:
   - LogUniform budget randomization per item for robust budget generalization
+  - Arrival rate sweeps with inter-sweep vLLM drain
   - Validation, early stopping, best-model checkpointing, LR scheduling
+  - λ saved/restored in checkpoints
 
 #### **MasRouter/** - Baseline Comparison
 
@@ -195,12 +205,16 @@ Unlike baseline MAS Router which only considers task features, INFRAMIND:
 1. **Monitors System State**: Real-time vLLM metrics (queue depth, cache usage, latencies)
 2. **Two-Level Decision Making**:
    - **Planner** (quality-driven): Selects topology + roles based on query semantics only
-   - **Executor** (infrastructure-aware): Selects (model, strategy) per step based on remaining budget + system metrics
+   - **Executor** (infrastructure-aware): Selects (model, strategy) jointly from 15 actions (5 models × 3 strategies) per step based on remaining budget + system metrics
 3. **Load-Adaptive Behavior** (executor-driven):
    - High load / tight budget → smaller models, Flash strategy
    - Low load / loose budget → larger models, DeepThink strategy
    - Topology/roles stay quality-optimal regardless of load
-4. **Quality-First Reward with Effort Mandate**: Correctness is the primary objective. Correct → [+0.50, +1.0] (even if over budget). Wrong → [-1.0, -0.7] with effort mandate (tried harder = less penalty) and quality predictor dense shaping. Min gap 1.20 between worst correct and best wrong. Prevents collapse to cheap/fast configurations.
+4. **PPO-Lagrangian Training**: Shared Lagrange multiplier λ automatically balances quality vs cost.
+   - Reward: `quality_reward - λ * cost` where quality is binary (solved/not), cost = latency/budget
+   - Dual update: λ increases when policy violates budget, decreases when within → auto-adapts
+   - Executor uses PPO clipped surrogate for stable updates; planner uses REINFORCE + same λ
+   - No hand-tuned reward coefficients, no quality predictor needed
 5. **LogUniform Budget Randomization**: Training samples budget ~ LogUniform(5, 300) per item for robust generalization across budget regimes.
 
 ### Reasoning Profiles
@@ -247,7 +261,7 @@ INFRAMIND monitors:
 
 Key files to modify:
 - `MAR/InfraMind/inframind_router.py`: Planner (topology/role selection), executor (model/strategy MLP), reward computation
-- `MAR/InfraMind/trainer.py`: Planner REINFORCE (quality-first), executor Actor-Critic, quality-first reward
+- `MAR/InfraMind/trainer.py`: Planner REINFORCE + Lagrangian, executor PPO-Lagrangian, shared λ
 - `MAR/InfraMind/training.py`: Training loop, budget randomization, validation, early stopping
 - `MAR/InfraMind/metrics_watcher.py`: System state representation
 
@@ -271,7 +285,8 @@ Key files to modify:
 **Datasets**: `/blue/qi855292.ucf/ah872032.ucf/datasets/`
 
 **Logs**: `logs/`
-- Training telemetry: `logs/baseline_mas_training/{dataset}/`
+- InfraMind training: `logs/inframind_training/{dataset}/`
+- Baseline training: `logs/baseline_train/{dataset}/`
 - Sweep results: `logs/motivation_plot_generator_data/`
 - vLLM logs: `logs/vllm/`
 

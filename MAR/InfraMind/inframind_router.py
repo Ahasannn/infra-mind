@@ -306,6 +306,7 @@ class InfraMindRouter(nn.Module):
         super().__init__()
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.random_exploration = False
+        self.executor_temperature = 1.0  # softmax temperature for inference sampling
 
         # Model pool for executor
         self.models = models or _load_models_from_profile() or [
@@ -384,17 +385,45 @@ class InfraMindRouter(nn.Module):
                         quality_predictor_path)
 
         # ---- Executor policy (model + strategy selection) -----------------
-        self.latency_dim = len(self.models) * len(self.strategies)
-        executor_state_dim = embedding_dim + embedding_dim + 1 + self.latency_dim
-        self.executor_backbone = nn.Sequential(
-            nn.Linear(executor_state_dim, executor_hidden_dim),
+        # Dual-pathway architecture: separate semantic and resource encoders
+        # so the budget/system signal isn't drowned by 768 embedding dims.
+        self.num_models = len(self.models)
+        self.executor_hidden_dim = executor_hidden_dim
+
+        # Pathway 1: Semantic (query_embedding + role_embedding → hidden)
+        self.semantic_encoder = nn.Sequential(
+            nn.Linear(2 * embedding_dim, executor_hidden_dim),
             nn.ReLU(),
             nn.LayerNorm(executor_hidden_dim),
-            nn.Linear(executor_hidden_dim, executor_hidden_dim),
+        )
+
+        # Pathway 2: Resource (budget + system metrics → hidden)
+        # Both budget and system metrics get learned expansions so they have
+        # equal representation — the executor must condition on BOTH signals
+        # jointly (budget × load interaction determines optimal action).
+        #   budget: 1 → 16 dims (time pressure signal)
+        #   system: 10 → 16 dims (queue_depths + e2e_avgs, infrastructure load signal)
+        budget_embed_dim = 16
+        system_embed_dim = 16
+        system_raw_dim = 2 * self.num_models  # queue_depths(5) + e2e_avgs(5) = 10
+        self.budget_encoder = nn.Linear(1, budget_embed_dim)
+        self.system_encoder = nn.Linear(system_raw_dim, system_embed_dim)
+        resource_input_dim = budget_embed_dim + system_embed_dim  # 16 + 16 = 32
+        resource_hidden_dim = 64
+        self.resource_encoder = nn.Sequential(
+            nn.Linear(resource_input_dim, resource_hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(resource_hidden_dim),
+        )
+
+        # Merged decision MLP
+        self.decision_mlp = nn.Sequential(
+            nn.Linear(executor_hidden_dim + resource_hidden_dim, executor_hidden_dim),
             nn.ReLU(),
         )
-        self.model_head = nn.Linear(executor_hidden_dim, len(self.models))
-        self.strategy_head = nn.Linear(executor_hidden_dim, len(self.strategies))
+
+        self.num_joint_actions = len(self.models) * len(self.strategies)
+        self.joint_head = nn.Linear(executor_hidden_dim, self.num_joint_actions)
         self.value_head = nn.Linear(executor_hidden_dim, 1)
 
         # Note: no Lagrange multiplier — reward uses direct over-budget penalty
@@ -607,48 +636,94 @@ class InfraMindRouter(nn.Module):
     # Executor: per-node (model, strategy) selection
     # ------------------------------------------------------------------
 
+    def _get_raw_system_metrics(self, dtype: torch.dtype) -> torch.Tensor:
+        """Collect per-model queue depth and e2e latency.
+
+        Returns [queue_depth_0, ..., queue_depth_N, e2e_0, ..., e2e_N]
+        where N = number of models.
+
+        queue_depth = (running + waiting) / 16  — congestion level (~[0, 2])
+        e2e_avg = log1p(e2e) / log(300)         — current throughput (~[0, 1])
+        """
+        queue_depths: List[float] = []
+        e2e_avgs: List[float] = []
+        for model_name in self.models:
+            snap = model_metrics.get(model_name, {})
+            n_run = float(snap.get("num_requests_running", 0.0))
+            n_wait = float(snap.get("num_requests_waiting", 0.0))
+            queue_depths.append((n_run + n_wait) / 16.0)
+            e2e = float(snap.get("e2e_avg", 0.0))
+            e2e_avgs.append(math.log1p(max(e2e, 0.0)) / math.log(300.0))
+        return torch.tensor(queue_depths + e2e_avgs, device=self.device, dtype=dtype)
+
     def assemble_executor_state(
         self,
         query_embedding: torch.Tensor,
         role_embedding: torch.Tensor,
         budget_remaining: float,
-        system_state_vector: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        # Normalize budget_remaining to [0, 1] via log-scaling so it matches
-        # embedding magnitudes (~0.3) instead of raw seconds (0-300+).
+        # Normalize budget_remaining to [0, 1] via log-scaling.
         norm_budget = math.log(max(budget_remaining, 1.0)) / math.log(300.0)
         budget_tensor = torch.tensor([norm_budget], device=self.device, dtype=query_embedding.dtype)
-        # Normalize predicted latencies: log(1 + lat) / log(300) to match scale
-        norm_sys = torch.log1p(system_state_vector.clamp_min(0.0)) / math.log(300.0)
-        state_tensor = torch.cat([query_embedding, role_embedding, budget_tensor, norm_sys], dim=0)
+        # Raw system metrics: queue_depth(5) + e2e_avg(5) per model = 10 dims
+        # These replace predicted latencies — direct, uncompressed system signal.
+        raw_metrics = self._get_raw_system_metrics(query_embedding.dtype)
+        state_tensor = torch.cat([query_embedding, role_embedding, budget_tensor, raw_metrics], dim=0)
         return {"state": state_tensor, "budget_remaining": torch.tensor([budget_remaining], device=self.device, dtype=query_embedding.dtype)}
+
+    def _compute_executor_hidden(self, state_tensor: torch.Tensor) -> torch.Tensor:
+        """Dual-pathway forward pass: semantic + resource → merged hidden."""
+        emb_dim = self.embedding_dim
+        # Split the concatenated state vector:
+        # [query_emb(384), role_emb(384), budget(1), queue_depths(5), e2e_avgs(5)]
+        sem_end = 2 * emb_dim
+        budget_end = sem_end + 1
+
+        semantic_input = state_tensor[..., :sem_end]                # query + role (768)
+        budget_input = state_tensor[..., sem_end:budget_end]        # budget (1)
+        system_input = state_tensor[..., budget_end:]               # queue + e2e (10)
+
+        # Pathway 1: Semantic
+        sem_hidden = self.semantic_encoder(semantic_input)           # 768 → 128
+
+        # Pathway 2: Resource (budget + system metrics, both with learned expansion)
+        budget_emb = self.budget_encoder(budget_input).relu()        # 1 → 16
+        system_emb = self.system_encoder(system_input).relu()        # 10 → 16
+        resource_input = torch.cat([budget_emb, system_emb], dim=-1) # 32
+        res_hidden = self.resource_encoder(resource_input)           # 32 → 64
+
+        # Merge pathways
+        merged = torch.cat([sem_hidden, res_hidden], dim=-1)         # 192
+        return self.decision_mlp(merged)                             # 192 → 128
 
     def get_executor_action(
         self, executor_state: Union[torch.Tensor, Dict[str, torch.Tensor]], deterministic: bool = False,
     ) -> Dict[str, torch.Tensor]:
         state_tensor = self._as_state_tensor(executor_state)
-        hidden = self.executor_backbone(state_tensor)
-        num_models = len(self.models)
+        hidden = self._compute_executor_hidden(state_tensor)
         num_strategies = len(self.strategies)
-        model_probs = self.model_head(hidden).softmax(dim=-1)
-        strategy_probs = self.strategy_head(hidden).softmax(dim=-1)
+        logits = self.joint_head(hidden)
+        # Raw probabilities (temp=1.0) — always returned for PPO ratio computation
+        joint_probs = logits.softmax(dim=-1)
 
         if self.random_exploration:
             # Phase 1: uniform-random actions for diverse exploration data
-            model_idx = torch.randint(0, num_models, (state_tensor.size(0),), device=self.device)
-            strategy_idx = torch.randint(0, num_strategies, (state_tensor.size(0),), device=self.device)
+            joint_idx = torch.randint(0, self.num_joint_actions, (state_tensor.size(0),), device=self.device)
         elif deterministic:
-            model_idx = model_probs.argmax(dim=-1)
-            strategy_idx = strategy_probs.argmax(dim=-1)
+            joint_idx = joint_probs.argmax(dim=-1)
         else:
-            model_idx = torch.distributions.Categorical(model_probs).sample()
-            strategy_idx = torch.distributions.Categorical(strategy_probs).sample()
+            # Apply temperature for inference sampling (temp=1.0 is identity)
+            sampling_probs = (logits / self.executor_temperature).softmax(dim=-1)
+            joint_idx = torch.distributions.Categorical(sampling_probs).sample()
+
+        model_idx = joint_idx // num_strategies
+        strategy_idx = joint_idx % num_strategies
 
         return {
             "model_index": model_idx,
             "strategy_index": strategy_idx,
-            "model_probs": model_probs,
-            "strategy_probs": strategy_probs,
+            "joint_index": joint_idx,
+            "joint_probs": joint_probs,
             "value": self.value_head(hidden).squeeze(-1),
         }
 
@@ -821,8 +896,9 @@ class InfraMindRouter(nn.Module):
     def executor_parameters(self):
         """All parameters that belong to the executor (for optimizer)."""
         params: List[torch.Tensor] = []
-        for module in [self.executor_backbone, self.model_head,
-                       self.strategy_head, self.value_head]:
+        for module in [self.semantic_encoder, self.budget_encoder,
+                       self.system_encoder, self.resource_encoder,
+                       self.decision_mlp, self.joint_head, self.value_head]:
             params.extend(module.parameters())
         return params
 

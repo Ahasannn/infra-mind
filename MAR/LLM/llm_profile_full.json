@@ -2,6 +2,7 @@
   "global_settings": {
     "default_max_model_len": 16384,
     "default_max_output_tokens": 2048,
+    "default_max_num_seqs": 16,
     "gpu_type": "NVIDIA B200",
     "total_gpus": 2
   },
@@ -14,7 +15,7 @@
       "vllm_config": {
         "port": 8001,
         "gpu_device": 0,
-        "gpu_memory_utilization": 0.40,
+        "gpu_memory_utilization": 0.50,
         "tensor_parallel_size": 1,
         "dtype": "bfloat16",
         "trust_remote_code": true,

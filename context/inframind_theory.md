@@ -24,7 +24,7 @@ InfraMind uses a **two-level hierarchy** separating structural decisions from re
 | Level | Observes | Decides | Operates |
 |-------|----------|---------|----------|
 | **Planner** | Query embedding $\mathbf{e}_q$ | Topology $\tau$, agent count $K$, roles $\mathcal{R}$ | Once at $t=0$ |
-| **Executor** | Query + role + remaining budget + system state | Model $m$, strategy $\sigma$ per role | Per agent node |
+| **Executor** | Query + role + remaining budget + raw system metrics | Model $m$, strategy $\sigma$ per role | Per agent node |
 | **EDF Scheduler** | Deadline $D_i = t_i^{\text{arr}} + \beta_i$ | Queue ordering | Per request at serving layer |
 
 ### 2.1 Planner (Quality-Driven, No Budget Awareness)
@@ -37,31 +37,35 @@ The planner is initialized from a pretrained MAS Router checkpoint (transferring
 
 **Available topologies:** IO (single agent), CoT (chain-of-thought), Chain, Debate, Reflection, FullConnected.
 
-### 2.2 Executor (Infrastructure-Aware)
+### 2.2 Executor (Infrastructure-Aware, Dual-Pathway)
 
 For each role $r_k$, the Executor selects a model and prompting strategy based on a state that fuses task semantics with real-time infrastructure conditions:
 
-$$s_{\text{exec}}^{(k)} = \left[ \mathbf{e}_q \,\|\, \mathbf{e}_{r_k} \,\|\, b_{\text{rem}} \,\|\, \mathbf{z}_{\text{sys}} \right]$$
+$$s_{\text{exec}}^{(k)} = \left[ \mathbf{e}_q \,\|\, \mathbf{e}_{r_k} \,\|\, b_{\text{rem}} \,\|\, \mathbf{d}_{\text{queue}} \,\|\, \mathbf{d}_{\text{e2e}} \right]$$
 
 where:
 - $\mathbf{e}_q \in \mathbb{R}^{384}$ = query embedding (SentenceTransformer)
 - $\mathbf{e}_{r_k} \in \mathbb{R}^{384}$ = role embedding
-- $b_{\text{rem}} \in \mathbb{R}^1$ = remaining budget (seconds)
-- $\mathbf{z}_{\text{sys}} \in \mathbb{R}^{|\mathcal{M}| \times |\Sigma|}$ = predicted latency map
+- $b_{\text{rem}} \in \mathbb{R}^1$ = remaining budget, log-scaled: $\log(\max(b, 1)) / \log(300)$
+- $\mathbf{d}_{\text{queue}} \in \mathbb{R}^{|\mathcal{M}|}$ = per-model queue depth: $(n_{\text{run}} + n_{\text{wait}}) / 16$
+- $\mathbf{d}_{\text{e2e}} \in \mathbb{R}^{|\mathcal{M}|}$ = per-model average end-to-end latency: $\log(1 + \text{e2e}) / \log(300)$
 
-**Action-Conditional Latency Map.** The system state enumerates the predicted latency for every (model, strategy) pair under current conditions:
+**Raw Metrics (No Predictors).** The executor observes **raw vLLM metrics directly** — queue depths and running-average E2E latencies polled from each model's `/metrics` endpoint. No latency predictors (TTFT, TPOT) or output length estimators are used. The RL policy learns to interpret these raw signals and map them to action choices, avoiding compounding prediction errors.
 
-$$\mathbf{z}_{\text{sys}} = \bigoplus_{m \in \mathcal{M}} \left[ \hat{L}_{m,\sigma_1} \,\|\, \cdots \,\|\, \hat{L}_{m,\sigma_{|\Sigma|}} \right]$$
+**Dual-Pathway Architecture.** To prevent the budget and system signals from being drowned by the 768-dimensional semantic embeddings, the executor uses separate encoding pathways:
 
-Each predicted latency is computed as:
+- **Pathway 1 — Semantic**: $[\mathbf{e}_q \| \mathbf{e}_{r_k}] \in \mathbb{R}^{768} \xrightarrow{\text{Linear+ReLU+LN}} \mathbb{R}^{128}$
+- **Pathway 2 — Resource**:
+  - Budget: $b_{\text{rem}} \in \mathbb{R}^{1} \xrightarrow{\text{Linear+ReLU}} \mathbb{R}^{16}$
+  - System: $[\mathbf{d}_{\text{queue}} \| \mathbf{d}_{\text{e2e}}] \in \mathbb{R}^{10} \xrightarrow{\text{Linear+ReLU}} \mathbb{R}^{16}$
+  - Concatenate → $\mathbb{R}^{32} \xrightarrow{\text{Linear+ReLU+LN}} \mathbb{R}^{64}$
+- **Merge**: $[\text{sem}_{128} \| \text{res}_{64}] \in \mathbb{R}^{192} \xrightarrow{\text{Linear+ReLU}} \mathbb{R}^{128}$
 
-$$\hat{L}_{m,\sigma} = \hat{T}_{m,\sigma}^{\text{TTFT}} + \hat{T}_{m,\sigma}^{\text{TPOT}} \cdot \hat{N}_{m,\sigma}^{\text{out}}$$
+**Joint Action Head.** A single head outputs $|\mathcal{M}| \times |\Sigma| = 15$ logits (one per model-strategy combination):
 
-This gives the executor a complete latency "price list" of all possible actions.
+$$\pi_{m,\sigma} = \text{Softmax}(\text{Head}_{\text{joint}}(\mathbf{h})) \in \mathbb{R}^{15}, \quad V(s) = \text{Head}_V(\mathbf{h})$$
 
-**Architecture:** A shared 2-layer MLP backbone (with LayerNorm and ReLU) with three factorized heads:
-
-$$\pi_m, \; \pi_\sigma = \text{Softmax}(\text{Head}_m(\mathbf{h})), \; \text{Softmax}(\text{Head}_\sigma(\mathbf{h})), \quad V(s) = \text{Head}_V(\mathbf{h})$$
+The selected joint action index $a$ decodes as: $m = a \,//\, |\Sigma|$, $\sigma = a \bmod |\Sigma|$. This captures model-strategy correlations (e.g., DeepThink is effective with large models but wasteful with small ones) that a factored design with independent heads would miss.
 
 **Model pool** (5 models on vLLM):
 - DeepSeek-R1-Distill-Qwen-32B (strongest, slowest)
@@ -81,69 +85,101 @@ Each query's deadline $D_i = t_i^{\text{arr}} + \beta_i$ is propagated to vLLM a
 
 ---
 
-## 3. Latency Estimation
+## 3. System Metrics (Raw vLLM Telemetry)
 
-Three neural predictors construct the latency map:
+The executor observes raw infrastructure metrics collected from each vLLM model server's `/metrics` endpoint by a background polling thread (5-second interval):
 
-| Predictor | Input Features | Output |
-|-----------|---------------|--------|
-| **TTFT** (time-to-first-token) | Prompt token count, $n_m^{\text{run}}$, $n_m^{\text{wait}}$, KV cache %, avg TPOT/TTFT/queue/inference | Prefill + queuing delay |
-| **TPOT** (time-per-output-token) | Same system metrics | Decode-phase speed |
-| **Output Length** | Query embedding $\mathbf{e}_q$, model/role/strategy embeddings | Predicted output tokens |
+| Metric | Description | Normalization |
+|--------|-------------|---------------|
+| Queue depth | Running + waiting requests per model | $(n_{\text{run}} + n_{\text{wait}}) / 16$ |
+| E2E latency | Delta-averaged end-to-end request latency | $\log(1 + \text{e2e}) / \log(300)$ |
 
-All predictors use MLPs with Softplus output activations to ensure non-negative predictions. Strategy conditioning is critical because prompting strategies (Flash, Concise, DeepThink) produce dramatically different output lengths.
+These two metrics per model (10 total for 5 models) are fed directly to the executor's resource pathway. The metrics watcher also collects TTFT, ITL, KV cache usage, queue time, and inference time from vLLM's Prometheus endpoint, but only queue depth and E2E average are used by the executor state.
+
+**Design rationale.** Earlier versions used neural predictors (TTFT predictor, TPOT predictor, output length estimator) to construct a predicted latency "price list" $\hat{L}_{m,\sigma}$ for every (model, strategy) pair. This approach was abandoned because: (1) prediction errors compounded across three models (TTFT × TPOT × length); (2) the predictors added training complexity and data requirements; (3) raw metrics provide a more direct signal — the RL policy can learn to interpret queue depth and E2E latency patterns that the predictors may miss.
 
 ---
 
-## 4. Training
+## 4. Training: PPO-Lagrangian
 
-### 4.1 Two-Level Training
+### 4.1 Constrained Optimization via Lagrangian Relaxation
 
-Training is separated for the two levels:
+The CMDP constraint $\mathbb{E}[C] \leq \beta$ is enforced via a shared Lagrange multiplier $\lambda$ that converts the constrained problem into an unconstrained saddle-point problem:
 
-**Planner training: Quality-first REINFORCE with effort mandate.**
+$$\max_{\pi} \min_{\lambda \geq 0} \; \mathbb{E}_{\pi}[R] - \lambda \cdot (\mathbb{E}_{\pi}[C] - 1)$$
 
-$$\text{utility} = \begin{cases} 1.0 - \min\left(0.5,\; 0.3 \cdot \max\left(0, \frac{L}{\beta} - 1.0\right)\right) & \text{if solved} \\ -1.0 + 0.3 \cdot \min\left(1, \frac{L}{\beta}\right) & \text{if wrong} \end{cases}$$
+where cost $C = \text{latency} / \beta$ so the constraint threshold is 1 (budget-normalized). A single shared $\lambda$ serves both planner and executor — the $1/\beta$ factor in the cost naturally creates different penalty magnitudes across budget tiers (tight budgets amplify cost, loose budgets attenuate it).
 
-- Correct answers: utility $\in [0.50, 1.0]$ — always positive, even if over budget
-- Wrong answers: utility $\in [-1.0, -0.7]$ — effort mandate rewards trying harder
-- Advantage: $A_i = \frac{\text{utility}_i - \mu}{\sigma}$ (normalized: mean-subtracted AND divided by std)
-- Loss: $\mathcal{L} = -\log\pi \cdot A + \mathcal{L}_{\text{task}} + 0.001 \cdot \mathcal{L}_{\text{VAE}}$
+**Dual update** (after each executor batch):
+$$\lambda \leftarrow \text{clip}\left(\lambda + \eta_\lambda \cdot (\bar{C} - 1),\; 0,\; \lambda_{\max}\right)$$
 
-**Executor training: Quality-first Actor-Critic with dense shaping.**
+where $\bar{C}$ is the batch-mean episode cost ratio, $\eta_\lambda = 0.001$, and $\lambda_{\max} = 1.0$.
 
-$$\text{reward} = \begin{cases} 1.0 - \min\left(0.5,\; 0.3 \cdot \max\left(0, \frac{L}{\beta} - 1.0\right)\right) & \text{if solved} \\ -1.0 + 0.3 \cdot w_q & \text{if wrong, quality predictor available} \\ -1.0 + 0.3 \cdot \min\left(1, \frac{L}{\beta}\right) & \text{if wrong, fallback to effort} \end{cases}$$
+When the policy violates budgets ($\bar{C} > 1$), $\lambda$ increases → both levels prioritize cost reduction. When the policy is within budget ($\bar{C} < 1$), $\lambda$ decreases → both levels focus on quality.
 
-- Actor loss: $-\log\pi \cdot \hat{A}$ with normalized advantages (zero mean, unit variance)
-- Critic loss: $\text{MSE}(V(s), \text{reward})$
-- Entropy bonus: $\alpha_H \cdot \mathcal{H}[\pi]$ (coefficient 0.10)
-- Total: $\mathcal{L} = \mathcal{L}_{\text{actor}} + 0.5 \cdot \mathcal{L}_{\text{critic}} - 0.10 \cdot \mathcal{H}$
+### 4.2 Planner Training (REINFORCE + Shared $\lambda$)
 
-**Design rationale.** Three key properties:
-1. *Lexicographic dominance*: Correct answers ALWAYS outrank wrong answers (min gap = 1.20).
-2. *Effort mandate*: Wrong answers that used more budget (tried harder) are penalized less than wrong answers that gave up quickly. This prevents collapse to cheap/fast configurations.
-3. *Dense shaping*: The quality predictor provides per-step gradient within wrong answers — "almost correct" gets -0.7, "garbage" gets -1.0 — enabling the executor to learn which (model, strategy) pairs produce better outputs even when the episode fails.
+$$\text{utility}_i = \underbrace{q_i}_{\text{quality}} - \underbrace{\lambda \cdot C_i}_{\text{cost penalty}}$$
 
-### 4.2 Budget Randomization
+where $q_i = 1$ if solved, $0$ otherwise, and $C_i = L_{\text{workflow}} / \beta$.
 
-Each training item samples budget $\beta \sim \text{LogUniform}(5, 300)$ seconds. Items within the same training batch share the same budget (sampled per batch block) so advantage normalization compares items at the same budget level.
+$$A_i = \frac{\text{utility}_i - \bar{u}}{\sigma_u} \qquad \text{(normalized advantage)}$$
 
-The LogUniform range [5, 300] was derived from Phase 1 data: idle workflows take 5-30s, heavy load workflows take 60-290s.
+$$\mathcal{L}_{\text{planner}} = -\log \pi_{\text{plan}} \cdot A + \mathcal{L}_{\text{task}} + 0.001 \cdot \mathcal{L}_{\text{VAE}}$$
 
-### 4.3 Training Loop Structure
+The planner uses REINFORCE (no critic) because it makes a single decision per episode. Task classification loss and VAE regularization are inherited from the MAS Router pretraining.
 
-Each "epoch" consists of 7 arrival rate sweeps: [10, 30, 50, 100, 150, 200, 300] req/min (shuffled). For each sweep:
+### 4.3 Executor Training (PPO + Shared $\lambda$)
+
+**Reward construction (per step):**
+$$r_i = \underbrace{q_i}_{\text{quality (binary)}} - \underbrace{\lambda \cdot \frac{l_i}{\beta}}_{\text{step cost}}$$
+
+where $q_i$ is the episode-level solve outcome (shared across all steps) and $l_i$ is the step-level latency.
+
+**PPO clipped surrogate** (K=3 mini-epochs per batch):
+$$\hat{A}_i = r_i - V(s_i) \qquad \text{(value-baselined, then normalized)}$$
+
+$$\rho_i = \frac{\pi_\theta(a_i | s_i)}{\pi_{\theta_{\text{old}}}(a_i | s_i)}$$
+
+$$\mathcal{L}_{\text{actor}} = -\mathbb{E}\left[\min\left(\rho \hat{A},\; \text{clip}(\rho, 1-\epsilon, 1+\epsilon) \hat{A}\right)\right]$$
+
+$$\mathcal{L}_{\text{executor}} = \mathcal{L}_{\text{actor}} + 0.5 \cdot \text{MSE}(V(s), r) - 0.10 \cdot \mathcal{H}[\pi]$$
+
+where $\epsilon = 0.2$ (clipping), $0.5$ is the value coefficient, and $0.10$ is the entropy bonus coefficient.
+
+### 4.4 Budget Randomization (Fixed Tiers)
+
+Each training item draws a budget from a fixed set of 8 tiers with equal probability:
+
+$$\beta \in \{10, 30, 50, 100, 200, 300, 600, 1000\} \text{ seconds}$$
+
+| Tier | Regime | Expected behavior |
+|------|--------|-------------------|
+| 10s | Extreme constraint | Only Llama-3B + Flash feasible |
+| 30s | Tight | Cheap models only, multi-step barely fits |
+| 50s | Moderate | Cheap/mid models comfortable |
+| 100s | Transition | Qwen comfortable, DeepSeek infeasible |
+| 200s | System-awareness boundary | DeepSeek viable at low load only |
+| 300s | DeepSeek viable | 2–3 steps possible with cheap filling |
+| 600s | Comfortable | DeepSeek comfortable at all loads |
+| 1000s | Generous | Unconstrained quality optimization |
+
+**Design rationale.** Fixed tiers replaced earlier LogUniform(5, 300) sampling because: (1) each tier gets equal representation; (2) cleaner learning signal at specific budget breakpoints; (3) easier analysis of budget-conditional behavior.
+
+### 4.5 Arrival Rate Sweeps
+
+Each training epoch consists of 6 arrival rate sweeps: $\{10, 30, 50, 100, 150, 200\}$ req/min (shuffled order). For each sweep:
 1. All training items are processed with Poisson arrivals at the given rate
-2. Every 64 episodes, a training batch update is performed
-3. Checkpoints saved every 50 episodes
+2. Every 64 episodes, a training batch update is performed (both planner and executor)
+3. Checkpoints are saved periodically
 
-After each full epoch (7 sweeps), validation is run deterministically on held-out data. LR scheduling (ReduceLROnPlateau) and early stopping (patience=5) are based on validation solve rate.
+After each full epoch (6 sweeps), validation is run deterministically on held-out data at the median budget tier (200s) and rate=100 req/min. LR scheduling (ReduceLROnPlateau) and early stopping (patience=12) are based on validation solve rate.
 
-### 4.4 Quality Predictor (Step-Level Credit Assignment)
+### 4.6 Warmup Strategy
 
-A trained quality predictor (MLP on query+response embeddings + model/role/strategy features) predicts a judge score $w_q \in [0, 10]$ for each executor step. When the episode outcome is wrong ($\text{is\_solved} = 0$), the quality predictor provides dense shaping: $\text{reward} = -1.0 + 0.3 \cdot (w_q / 10)$. This gives the executor a per-step gradient even within failed episodes — steps with higher predicted quality get less penalty, enabling the policy to learn that better (model, strategy) pairs produce more valuable outputs.
+$\lambda$ is active from epoch 0 (no warmup). Earlier experiments showed that warmup (holding $\lambda = 0$ for several epochs) was counterproductive: it allows the policy to develop quality-biased habits that $\lambda$ must then undo, creating instability. Initializing $\lambda = 0.2$ from the start provides gentle cost pressure that shapes budget-conditional behavior alongside quality learning.
 
-### 4.5 Workflow Latency
+### 4.7 Workflow Latency
 
 The workflow executes in topological waves. Nodes within a wave run in parallel; waves execute sequentially:
 
@@ -151,7 +187,20 @@ $$C_{\text{workflow}} = \sum_{w=1}^{W} \max_{r_k \in \text{wave}_w} L_k$$
 
 ---
 
-## 5. Notation Reference
+## 5. How Load-Awareness Emerges
+
+The executor does not receive an explicit "load level" signal. Instead, load-awareness emerges **indirectly through cost pressure**:
+
+1. High arrival rates → deeper queues → longer E2E latencies → budget depletes faster
+2. Faster budget depletion → higher cost ratio $L/\beta$
+3. Higher cost ratio → $\lambda$ dual update increases → executor shifts to cheaper (model, strategy) pairs
+4. Additionally, the executor sees raw queue depths in its state, learning that high queues predict long waits
+
+This indirect mechanism is sufficient: experiments show that when cost ratio > 1.0, DeepSeek usage drops from 25.9% to 8.5% while Llama-3B surges from ~15% to 40.2%.
+
+---
+
+## 6. Notation Reference
 
 | Symbol | Description |
 |--------|-------------|
@@ -161,9 +210,13 @@ $$C_{\text{workflow}} = \sum_{w=1}^{W} \max_{r_k \in \text{wave}_w} L_k$$
 | $\mathcal{R}$, $r_k$ | Role set, role at position $k$ |
 | $\Sigma$, $\sigma$ | Strategy set $\{\text{Flash, Concise, DeepThink}\}$, selected strategy |
 | $\beta$, $b_{\text{rem}}$ | Total latency budget, remaining budget |
-| $\hat{L}_{m,\sigma}$ | Predicted latency for model $m$ with strategy $\sigma$ |
-| $n_m^{\text{run}}$, $n_m^{\text{wait}}$ | Running / waiting requests on model $m$ |
+| $\lambda$ | Shared Lagrange multiplier (quality-cost tradeoff) |
+| $C$ | Cost: $\text{latency} / \beta$ (budget-normalized) |
+| $\mathbf{d}_{\text{queue}}$ | Per-model queue depth (running + waiting) / 16 |
+| $\mathbf{d}_{\text{e2e}}$ | Per-model log-scaled average E2E latency |
 | $\pi_{\text{plan}}$, $\pi_{\text{exec}}$ | Planner policy, executor policy |
 | $V(s)$ | Learned value function (executor critic) |
 | $D_i$ | Deadline of query $i$: $t_i^{\text{arr}} + \beta_i$ |
-| $w_q$ | Quality predictor weight for executor credit assignment |
+| $\eta_\lambda$ | Lagrange multiplier learning rate (0.001) |
+| $\lambda_{\max}$ | Maximum $\lambda$ cap (1.0) |
+| $\epsilon$ | PPO clipping parameter (0.2) |

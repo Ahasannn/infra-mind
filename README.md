@@ -136,7 +136,7 @@ For comparison, train the baseline MAS Router without infrastructure awareness:
 # Using SLURM (recommended for HPC)
 sbatch scripts/baseline_train/submit_mas_train_mbpp.slurm
 sbatch scripts/baseline_train/submit_mas_train_gsm8k.slurm
-sbatch scripts/baseline_train/submit_mas_train_math.slurm
+sbatch scripts/baseline_train/math/train_mas_math.slurm
 sbatch scripts/baseline_train/submit_mas_train_humaneval.slurm
 sbatch scripts/baseline_train/submit_mas_train_mmlu.slurm
 

@@ -1,18 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=inframind_step4_train
-#SBATCH --output=logs/InfraMind_Phase_1_Training/math/step4_train/slurm-%j.out
-#SBATCH --error=logs/InfraMind_Phase_1_Training/math/step4_train/slurm-%j.err
+#SBATCH --job-name=inframind_ppo_lag
+#SBATCH --output=logs/inframind_training/math/slurm-%j.out
+#SBATCH --error=logs/inframind_training/math/slurm-%j.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH --mem=64G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
-# Step 4: InfraMind training — resume from best checkpoint
-#   Phase 2b: budget-awareness focus with tighter budgets, lower max_num_seqs
+# InfraMind PPO-Lagrangian training (v5 — expanded tiers + rates)
+#   Dual-pathway executor: semantic encoder + resource encoder.
+#   Cost = lat/budget (no urgency multiplier).
+#   Budget tiers: 10,30,50,100,200,300,600,1000 (8 tiers).
+#   Arrival rates: 10,30,50,100,150,200 (6 rates, full load spectrum).
+#   No warmup: λ active from epoch 0.
+#   λ_max=1.0, lr_λ=0.001 → slow, bounded cost pressure.
+#   max_num_seqs=16 for all models.
+#   Resume from v4 checkpoint (budget-awareness already learned).
 # =========================================================================
 
 echo "========================================="
@@ -35,58 +42,45 @@ echo ""
 # --- Configuration ---
 DATASET="${DATASET:-math}"
 DATASET_ROOT="${DATASET_ROOT:-${BLUE_STORAGE}/datasets/MATH}"
-PREDICTOR_DIR="${PREDICTOR_DIR:-${BLUE_STORAGE}/checkpoints/predictors}"
 MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost100.pth}"
-LATENCY_PREDICTOR="${PREDICTOR_DIR}/latency_estimator.pth"
-LENGTH_PREDICTOR="${PREDICTOR_DIR}/length_estimator.pth"
-QUALITY_PREDICTOR="${PREDICTOR_DIR}/quality_estimator.pth"
 
 LIMIT="${LIMIT:-519}"
 VAL_LIMIT="${VAL_LIMIT:-131}"
 EPOCHS="${EPOCHS:-40}"
-ARRIVAL_RATES="${ARRIVAL_RATES:-10,50,100,200,400,150}"
-BUDGET_MIN="${BUDGET_MIN:-5}"
-BUDGET_MAX="${BUDGET_MAX:-120}"
+ARRIVAL_RATES="${ARRIVAL_RATES:-10,30,50,100,150,200}"
+BUDGET_TIERS="${BUDGET_TIERS:-10,30,50,100,200,300,600,1000}"
 CONCURRENCY="${CONCURRENCY:-1000}"
 TRAINING_BATCH_SIZE="${TRAINING_BATCH_SIZE:-64}"
-PATIENCE="${PATIENCE:-8}"
+PATIENCE="${PATIENCE:-12}"
 
-# vLLM concurrency per server — lower to create real queue pressure
+# PPO-Lagrangian hyperparameters
+PPO_EPOCHS="${PPO_EPOCHS:-3}"
+PPO_CLIP="${PPO_CLIP:-0.2}"
+LAMBDA_INIT="${LAMBDA_INIT:-0.2}"
+LR_LAMBDA="${LR_LAMBDA:-0.001}"
+LAMBDA_MAX="${LAMBDA_MAX:-1.0}"
+WARMUP_EPOCHS="${WARMUP_EPOCHS:-0}"
+
+# vLLM concurrency per server
 export VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-16}"
 
-CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/inframind"
+# Checkpoint dir — separate from old reward-based checkpoints
+CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag"
 mkdir -p "${CHECKPOINT_DIR}"
 
-# Resume from the best checkpoint from previous training (val_solve_rate=0.7252)
-# --checkpoint-path is the file to LOAD from (when --resume-checkpoint is set).
-# After loading, new saves go to ${CHECKPOINT_DIR}/inframind_${DATASET}_{run_id}.pt
-CHECKPOINT_PATH="${CHECKPOINT_DIR}/inframind_math_20260219_112548_job25279835_best.pt"
-
-LOG_BASE="logs/InfraMind_Phase_1_Training/${DATASET}"
-STEP_DIR="${LOG_BASE}/step4_train"
-mkdir -p "${STEP_DIR}"
-TELEMETRY_CSV="${STEP_DIR}/train_${SLURM_JOB_ID}.csv"
+LOG_DIR="logs/inframind_training/${DATASET}"
+mkdir -p "${LOG_DIR}"
+TELEMETRY_CSV="${LOG_DIR}/ppo_lag_${SLURM_JOB_ID}.csv"
 
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
 
-# --- Verify predictors exist ---
-echo "Checking predictor checkpoints..."
-for ckpt in "${LATENCY_PREDICTOR}" "${LENGTH_PREDICTOR}" "${QUALITY_PREDICTOR}"; do
-    if [ ! -f "$ckpt" ]; then
-        echo "ERROR: Missing predictor checkpoint: $ckpt"
-        echo "Run step3_train_predictors.slurm first."
-        exit 1
-    fi
-    echo "  Found: $ckpt ($(du -h "$ckpt" | cut -f1))"
-done
-
-# Verify resume checkpoint exists
-if [ ! -f "${CHECKPOINT_PATH}" ]; then
-    echo "ERROR: Resume checkpoint not found: ${CHECKPOINT_PATH}"
+# Verify MAS checkpoint for planner initialization
+if [ ! -f "${MAS_CHECKPOINT}" ]; then
+    echo "ERROR: MAS checkpoint not found: ${MAS_CHECKPOINT}"
     exit 1
 fi
-echo "  Resume checkpoint: ${CHECKPOINT_PATH} ($(du -h "${CHECKPOINT_PATH}" | cut -f1))"
+echo "  MAS checkpoint: ${MAS_CHECKPOINT} ($(du -h "${MAS_CHECKPOINT}" | cut -f1))"
 echo ""
 
 # --- vLLM cleanup ---
@@ -120,50 +114,88 @@ echo "vLLM servers ready!"
 bash scripts/check_vllm_status.sh
 echo ""
 
-# --- Phase 2 training ---
+# --- PPO-Lagrangian training ---
 echo "========================================="
-echo "InfraMind Training (Resume from best checkpoint)"
+echo "InfraMind PPO-Lagrangian Training (v5 — expanded tiers + rates)"
 echo "Dataset: ${DATASET}"
 echo "Limit: ${LIMIT} train, ${VAL_LIMIT} val"
 echo "Epochs: ${EPOCHS}, Patience: ${PATIENCE}"
-echo "Budget: LogUniform(${BUDGET_MIN}, ${BUDGET_MAX})"
+echo "Budget tiers: ${BUDGET_TIERS}"
+echo "PPO: epochs=${PPO_EPOCHS} clip=${PPO_CLIP}"
+echo "Lagrangian: λ_init=${LAMBDA_INIT} lr_λ=${LR_LAMBDA} λ_max=${LAMBDA_MAX}"
+echo "Warmup: ${WARMUP_EPOCHS} epochs"
+echo "Cost: lat/budget (no urgency)"
 echo "vLLM max_num_seqs: ${VLLM_MAX_NUM_SEQS}"
-echo "Reward: quality-first + effort mandate + quality predictor shaping"
 echo "Arrival rates: ${ARRIVAL_RATES}"
 echo "Concurrency: ${CONCURRENCY}"
-echo "Resume checkpoint: ${CHECKPOINT_PATH}"
-echo "Predictors: latency, length, quality"
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_math_20260223_003247_job25482979.pt}"
+
+echo "MAS planner init: ${MAS_CHECKPOINT}"
+if [ -n "${RESUME_CHECKPOINT}" ]; then
+echo "Resume from: ${RESUME_CHECKPOINT}"
+fi
 echo "========================================="
 
 CMD="python Experiments/train_inframind_${DATASET}.py \
   --epochs ${EPOCHS} \
   --limit ${LIMIT} \
   --val-limit ${VAL_LIMIT} \
-  --budget-min ${BUDGET_MIN} \
-  --budget-max ${BUDGET_MAX} \
+  --budget-tiers ${BUDGET_TIERS} \
   --arrival-rates ${ARRIVAL_RATES} \
   --concurrency ${CONCURRENCY} \
   --training-batch-size ${TRAINING_BATCH_SIZE} \
   --patience ${PATIENCE} \
   --lr-scheduler --lr-patience 3 --lr-factor 0.5 \
+  --ppo-epochs ${PPO_EPOCHS} \
+  --ppo-clip ${PPO_CLIP} \
+  --lambda-init ${LAMBDA_INIT} \
+  --lr-lambda ${LR_LAMBDA} \
+  --lambda-max ${LAMBDA_MAX} \
+  --warmup-epochs ${WARMUP_EPOCHS} \
   --mas-checkpoint ${MAS_CHECKPOINT} \
-  --resume-checkpoint \
-  --latency-predictor ${LATENCY_PREDICTOR} \
-  --length-predictor ${LENGTH_PREDICTOR} \
-  --quality-predictor ${QUALITY_PREDICTOR} \
-  --checkpoint-path ${CHECKPOINT_PATH} \
   --checkpoint-dir ${CHECKPOINT_DIR} \
   --telemetry-csv ${TELEMETRY_CSV} \
   --dataset-root ${DATASET_ROOT}"
 
+# Append resume flags if checkpoint provided
+if [ -n "${RESUME_CHECKPOINT}" ] && [ -f "${RESUME_CHECKPOINT}" ]; then
+  CMD="${CMD} --checkpoint-path ${RESUME_CHECKPOINT} --resume-checkpoint"
+  echo "Resuming from: ${RESUME_CHECKPOINT}"
+fi
+
 echo "Command: $CMD"
+
+# --- Watchdog: kill job if no log update for 1 hour ---
+WATCHDOG_TIMEOUT=3600  # seconds
+ERR_LOG="logs/inframind_training/${DATASET}/slurm-${SLURM_JOB_ID}.err"
+(
+  while true; do
+    sleep 300  # check every 5 minutes
+    if [ -f "$ERR_LOG" ]; then
+      last_mod=$(stat -c %Y "$ERR_LOG" 2>/dev/null || echo 0)
+      now=$(date +%s)
+      stale=$((now - last_mod))
+      if [ "$stale" -ge "$WATCHDOG_TIMEOUT" ]; then
+        echo "[WATCHDOG] No log update for ${stale}s (limit: ${WATCHDOG_TIMEOUT}s). Killing job." >&2
+        scancel "$SLURM_JOB_ID"
+        exit 1
+      fi
+    fi
+  done
+) &
+WATCHDOG_PID=$!
+echo "Watchdog started (PID $WATCHDOG_PID, timeout=${WATCHDOG_TIMEOUT}s)"
+
 set +e
 $CMD
 EXIT_CODE=$?
 set -e
 
+# Kill watchdog
+kill $WATCHDOG_PID 2>/dev/null
+
 # Create well-known symlink for easy access
-LATEST_LINK="${STEP_DIR}/train.csv"
+LATEST_LINK="${LOG_DIR}/ppo_lag_train.csv"
 if [ $EXIT_CODE -eq 0 ] && [ -f "${TELEMETRY_CSV}" ]; then
     ln -sf "$(basename "${TELEMETRY_CSV}")" "${LATEST_LINK}"
     echo "Symlinked: ${LATEST_LINK} -> $(basename "${TELEMETRY_CSV}")"
@@ -171,8 +203,8 @@ fi
 
 echo ""
 echo "========================================="
-echo "Step 4 completed with exit code: $EXIT_CODE"
-echo "Checkpoint: ${CHECKPOINT_PATH}"
+echo "PPO-Lagrangian training completed with exit code: $EXIT_CODE"
+echo "Checkpoint dir: ${CHECKPOINT_DIR}"
 echo "Telemetry: ${TELEMETRY_CSV}"
 echo "Latest link: ${LATEST_LINK}"
 echo "End Time: $(date)"
