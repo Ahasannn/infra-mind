@@ -20,6 +20,7 @@ from MAR.InfraMind.trainer import InfraMindTrainer
 from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestResult, RequestShooter
 from MAR.Utils.telemetry import CsvTelemetryWriter
+from MAR.Utils.vllm_health import VllmHealthChecker
 
 
 INFRAMIND_CSV_FIELDS: Sequence[str] = (
@@ -701,12 +702,19 @@ def main(default_dataset: str = "mbpp") -> None:
     process_lock = threading.Lock()
     training_lock = threading.Lock()
 
+    # Periodic vLLM health check — exits cleanly if servers die
+    health_checker = VllmHealthChecker.from_profile(interval_seconds=3600)
+    if not health_checker.check_now():
+        logger.critical("vLLM servers not healthy at startup. Aborting.")
+        import sys; sys.exit(1)
+
     # Early stopping / best model tracking
     best_val_solve_rate = -1.0
     epochs_without_improvement = 0
     patience = getattr(args, "patience", 5)
 
     for epoch in range(start_epoch, args.epochs):
+        health_checker.check_or_exit()
         random.shuffle(sweep_configs)
         for sweep_idx, (arrival_rate, arrival_pattern, sweep_budget) in enumerate(sweep_configs):
             # ---- Inter-sweep cooldown: wait for ALL vLLM queues to fully drain ----

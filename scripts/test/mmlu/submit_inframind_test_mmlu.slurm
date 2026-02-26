@@ -74,7 +74,7 @@ fi
 # ===== Paths =====
 # TODO: Update checkpoint path after InfraMind training completes
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_mmlu_best.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_mmlu_train_500_cost100.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_mmlu_train_500_cost0.pth"
 
 # ===== Output =====
 OUTPUT_CSV="logs/test/mmlu/inframind_mmlu_test.csv"

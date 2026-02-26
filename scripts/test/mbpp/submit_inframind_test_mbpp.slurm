@@ -61,7 +61,7 @@ ARRIVAL_PATTERN="poisson"
 # ===== Paths =====
 # TODO: Update checkpoint path after InfraMind training completes
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_mbpp_best.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost100.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost0.pth"
 
 # ===== Output =====
 OUTPUT_CSV="logs/test/mbpp/inframind_mbpp_test.csv"

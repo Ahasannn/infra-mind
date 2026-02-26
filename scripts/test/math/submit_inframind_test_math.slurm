@@ -67,7 +67,7 @@ ARRIVAL_PATTERN="poisson"
 
 # ===== Paths (no predictors — raw system metrics, same as training) =====
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_math_20260223_113618_job25513733.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost100.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost0.pth"
 
 # ===== Output =====
 OUTPUT_CSV="logs/test/math/inframind_math_test.csv"

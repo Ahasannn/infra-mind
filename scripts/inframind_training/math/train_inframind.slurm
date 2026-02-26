@@ -42,7 +42,7 @@ echo ""
 # --- Configuration ---
 DATASET="${DATASET:-math}"
 DATASET_ROOT="${DATASET_ROOT:-${BLUE_STORAGE}/datasets/MATH}"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost100.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost0.pth}"
 
 LIMIT="${LIMIT:-519}"
 VAL_LIMIT="${VAL_LIMIT:-131}"

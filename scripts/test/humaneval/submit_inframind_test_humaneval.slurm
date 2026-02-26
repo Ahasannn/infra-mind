@@ -64,7 +64,7 @@ ARRIVAL_PATTERN="poisson"
 DATASET_PATH="${BLUE_STORAGE}/datasets/humaneval/humaneval-py.jsonl"
 # TODO: Update checkpoint path after InfraMind training completes
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_humaneval_best.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_humaneval_train_33_cost100.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_humaneval_train_33_cost0.pth"
 
 # ===== Output =====
 OUTPUT_CSV="logs/test/humaneval/inframind_humaneval_test.csv"
