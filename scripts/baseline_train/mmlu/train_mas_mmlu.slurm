@@ -12,7 +12,7 @@
 
 # =========================================================================
 # Baseline MAS Router training for MMLU dataset
-#   Trains sequentially with cost_rates: 100, 400, 700
+#   Trains sequentially with cost_rates: 0, 100, 400, 700
 #   5 epochs each, auto-resumes from existing checkpoint if found
 # =========================================================================
 
@@ -106,7 +106,7 @@ echo ""
 EPOCHS=5
 BATCH_SIZE=32
 LR=0.01
-COST_RATES=(100 400 700)
+COST_RATES=(0 100 400 700)
 
 echo "========================================="
 echo "Baseline MAS Training — MMLU"

@@ -13,12 +13,12 @@
 # =========================================================================
 # Baseline MAS Router — Test Sweep for HumanEval
 #   Small dataset: 131 test items (split-ratio 0.2)
-#   Cost rates:    100, 400, 700  (one checkpoint each)
+#   Cost rates:    0, 100, 400, 700  (one checkpoint each)
 #   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
 #   max_num_seqs=16
 #   vLLM is drained between each (cost_rate, arrival_rate) config.
 #
-#   Total: 3 cost_rates x 6 arrival_rates x 131 items = 2,358 episodes
+#   Total: 4 cost_rates x 6 arrival_rates x 131 items = 3,144 episodes
 #
 #   Output CSV:
 #     logs/test/humaneval/baseline_humaneval_test.csv
@@ -55,7 +55,7 @@ mkdir -p logs/test/humaneval
 TEST_LIMIT=131
 SPLIT_RATIO=0.2
 CONCURRENCY=1000
-COST_RATES=(100 400 700)
+COST_RATES=(0 100 400 700)
 ARRIVAL_RATES=(10 30 50 100 150 200)
 ARRIVAL_PATTERN="poisson"
 
@@ -167,7 +167,7 @@ TOTAL_CONFIGS=$(( ${#COST_RATES[@]} * ${#ARRIVAL_RATES[@]} ))
 echo "========================================="
 echo "Baseline MAS Router — HumanEval Test Sweep"
 echo "========================================="
-echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_humaneval_train_${TRAIN_LIMIT}_cost{100,400,700}.pth"
+echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_humaneval_train_${TRAIN_LIMIT}_cost{0,100,400,700}.pth"
 echo "Cost rates:      ${COST_RATES[*]}"
 echo "Arrival rates:   ${ARRIVAL_RATES[*]}"
 echo "Pattern:         ${ARRIVAL_PATTERN}"

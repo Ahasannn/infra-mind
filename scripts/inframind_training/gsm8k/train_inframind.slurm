@@ -39,7 +39,7 @@ echo ""
 # --- Configuration ---
 DATASET="gsm8k"
 DATASET_PATH="${DATASET_PATH:-${BLUE_STORAGE}/datasets/gsm8k/gsm8k.jsonl}"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_gsm8k_train_500_cost100.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_gsm8k_train_500_cost0.pth}"
 
 LIMIT="${LIMIT:-500}"
 VAL_LIMIT="${VAL_LIMIT:-125}"

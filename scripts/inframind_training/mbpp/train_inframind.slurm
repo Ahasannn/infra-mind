@@ -38,7 +38,7 @@ echo ""
 
 # --- Configuration ---
 DATASET="mbpp"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost100.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost0.pth}"
 
 LIMIT="${LIMIT:-374}"
 VAL_LIMIT="${VAL_LIMIT:-94}"

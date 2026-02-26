@@ -12,12 +12,12 @@
 
 # =========================================================================
 # Baseline MAS Router — Test Sweep for MBPP
-#   Cost rates:    100, 400, 700  (one checkpoint each)
+#   Cost rates:    0, 100, 400, 700  (one checkpoint each)
 #   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
 #   max_num_seqs=16
 #   vLLM is drained between each (cost_rate, arrival_rate) config.
 #
-#   Total: 3 cost_rates x 6 arrival_rates x 500 items = 9,000 episodes
+#   Total: 4 cost_rates x 6 arrival_rates x 500 items = 12,000 episodes
 #
 #   Output CSV:
 #     logs/test/mbpp/baseline_mbpp_test.csv
@@ -53,7 +53,7 @@ mkdir -p logs/test/mbpp
 # ===== Run settings =====
 TEST_LIMIT=500
 CONCURRENCY=1000
-COST_RATES=(100 400 700)
+COST_RATES=(0 100 400 700)
 ARRIVAL_RATES=(10 30 50 100 150 200)
 ARRIVAL_PATTERN="poisson"
 
@@ -165,7 +165,7 @@ TOTAL_CONFIGS=$(( ${#COST_RATES[@]} * ${#ARRIVAL_RATES[@]} ))
 echo "========================================="
 echo "Baseline MAS Router — MBPP Test Sweep"
 echo "========================================="
-echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_mbpp_train_${TRAIN_LIMIT}_cost{100,400,700}.pth"
+echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_mbpp_train_${TRAIN_LIMIT}_cost{0,100,400,700}.pth"
 echo "Cost rates:      ${COST_RATES[*]}"
 echo "Arrival rates:   ${ARRIVAL_RATES[*]}"
 echo "Pattern:         ${ARRIVAL_PATTERN}"

@@ -61,7 +61,7 @@ ARRIVAL_PATTERN="poisson"
 DATASET_PATH="${BLUE_STORAGE}/datasets/gsm8k/gsm8k.jsonl"
 # TODO: Update checkpoint path after InfraMind training completes
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_gsm8k_best.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_gsm8k_train_500_cost100.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_gsm8k_train_500_cost0.pth"
 
 # ===== Output =====
 OUTPUT_CSV="logs/test/gsm8k/inframind_gsm8k_test.csv"

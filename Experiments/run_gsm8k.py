@@ -24,6 +24,7 @@ from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
 from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
+from MAR.Utils.vllm_health import VllmHealthChecker
 from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 from Datasets.gsm8k_dataset import gsm_get_predict
 
@@ -237,6 +238,12 @@ if __name__ == '__main__':
     reasonings = reasoning_profile
     logger.info("Start training...")
 
+    # Periodic vLLM health check — exits cleanly if servers die
+    health_checker = VllmHealthChecker.from_profile(interval_seconds=3600)
+    if not health_checker.check_now():
+        logger.critical("vLLM servers not healthy at startup. Aborting.")
+        sys.exit(1)
+
     episode_counter = 0
     checkpoint_dir = os.path.join("checkpoints", "mas_router")
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -257,6 +264,7 @@ if __name__ == '__main__':
             continue
 
         for i_batch in range(train_batches):
+            health_checker.check_or_exit()
             start_ts = time.time()
             current_batch = dataloader(train_dataset, args.batch_size, i_batch)
             queries = [item['task'] for item in current_batch]

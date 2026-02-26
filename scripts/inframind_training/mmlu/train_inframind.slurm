@@ -39,7 +39,7 @@ echo ""
 # --- Configuration ---
 DATASET="mmlu"
 DATASET_ROOT="${DATASET_ROOT:-${BLUE_STORAGE}/datasets/MMLU/data}"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_mmlu_train_500_cost100.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_mmlu_train_500_cost0.pth}"
 
 LIMIT="${LIMIT:-500}"
 VAL_LIMIT="${VAL_LIMIT:-125}"

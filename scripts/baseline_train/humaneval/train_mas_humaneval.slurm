@@ -13,7 +13,7 @@
 # =========================================================================
 # Baseline MAS Router training for HumanEval dataset
 #   Small dataset: 164 total (33 train / 131 test with split-ratio 0.2)
-#   Trains sequentially with cost_rates: 100, 400, 700
+#   Trains sequentially with cost_rates: 0, 100, 400, 700
 #   10 epochs each (more epochs for tiny dataset)
 #   Batch size 16 (smaller for small dataset)
 # =========================================================================
@@ -96,7 +96,7 @@ EPOCHS=10
 BATCH_SIZE=16
 LR=0.01
 SPLIT_RATIO=0.2
-COST_RATES=(100 400 700)
+COST_RATES=(0 100 400 700)
 
 echo "========================================="
 echo "Baseline MAS Training — HumanEval"

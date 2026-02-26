@@ -26,6 +26,7 @@ from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
 from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
+from MAR.Utils.vllm_health import VllmHealthChecker
 from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 from Datasets.math_dataset import load_math_dataset, MATH_is_correct, MATH_get_predict
 
@@ -276,6 +277,12 @@ if __name__ == '__main__':
     reasonings = reasoning_profile
     logger.info("Start training...")
 
+    # Periodic vLLM health check — exits cleanly if servers die
+    health_checker = VllmHealthChecker.from_profile(interval_seconds=3600)
+    if not health_checker.check_now():
+        logger.critical("vLLM servers not healthy at startup. Aborting.")
+        sys.exit(1)
+
     episode_counter = 0
     checkpoint_dir = os.path.join("checkpoints", "mas_router")
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -298,6 +305,7 @@ if __name__ == '__main__':
         pbar = tqdm(range(train_batches), desc=f"Epoch {epoch}/{args.epochs}", unit="batch",
                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}")
         for i_batch in pbar:
+            health_checker.check_or_exit()
             if i_batch < args.start_batch:
                 continue
             start_ts = time.time()

@@ -41,7 +41,7 @@ echo ""
 # --- Configuration ---
 DATASET="humaneval"
 DATASET_PATH="${DATASET_PATH:-${BLUE_STORAGE}/datasets/humaneval/humaneval-py.jsonl}"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_humaneval_train_33_cost100.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_humaneval_train_33_cost0.pth}"
 
 LIMIT="${LIMIT:-33}"
 VAL_LIMIT="${VAL_LIMIT:-10}"
