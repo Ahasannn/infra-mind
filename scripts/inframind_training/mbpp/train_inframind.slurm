@@ -14,8 +14,8 @@
 # InfraMind PPO-Lagrangian training for MBPP
 #   Dual-pathway executor: semantic encoder + resource encoder.
 #   Cost = lat/budget (no urgency multiplier).
-#   Budget tiers: 10,30,50,100,200,300,600,1000 (8 tiers).
-#   Arrival rates: 10,30,50,100,150,200 (6 rates).
+#   Budget tiers: 30,50,100,200,300 (5 tiers).
+#   Arrival rates: 10,30,50,100,200 (5 rates).
 #   No warmup: lambda active from epoch 0.
 # =========================================================================
 
@@ -38,13 +38,13 @@ echo ""
 
 # --- Configuration ---
 DATASET="mbpp"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost0.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost5.pth}"
 
 LIMIT="${LIMIT:-374}"
 VAL_LIMIT="${VAL_LIMIT:-94}"
 EPOCHS="${EPOCHS:-40}"
-ARRIVAL_RATES="${ARRIVAL_RATES:-10,30,50,100,150,200}"
-BUDGET_TIERS="${BUDGET_TIERS:-10,30,50,100,200,300,600,1000}"
+ARRIVAL_RATES="${ARRIVAL_RATES:-10,30,50,100,200}"
+BUDGET_TIERS="${BUDGET_TIERS:-30,50,100,200,300}"
 CONCURRENCY="${CONCURRENCY:-1000}"
 TRAINING_BATCH_SIZE="${TRAINING_BATCH_SIZE:-64}"
 PATIENCE="${PATIENCE:-12}"

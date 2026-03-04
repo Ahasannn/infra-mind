@@ -26,14 +26,20 @@ def get_call_str(assert_statement: str) -> str:
 
     return astunparse.unparse(call_str).strip()
 
+def _get_output_worker(func: str, func_call: str) -> object:
+    """Run exec+eval in a subprocess so infinite loops can be killed."""
+    ns = {}
+    exec(f"from typing import *\n{func}", ns)
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return eval(func_call, ns)
+
+
 def get_output(func: str, assert_statement: str, timeout: int = None) -> str:
     if timeout is None:
         timeout = DEFAULT_CODE_TIMEOUT
     try:
-        exec(f"from typing import *\n{func}", globals())
         func_call = get_call_str(assert_statement)
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            output = function_with_timeout(eval, (func_call, globals()), timeout)
+        output = function_with_timeout(_get_output_worker, (func, func_call), timeout)
         return output
     except TimeoutError:
         return "TIMEOUT"

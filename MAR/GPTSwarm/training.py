@@ -22,6 +22,7 @@ import json
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, List, Optional, Tuple
 
 import torch
@@ -142,7 +143,7 @@ def main(
         description=f"GPTSwarm training — {default_dataset}"
     )
     add_common_args(parser)
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     fix_random_seed(args.seed)
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
@@ -214,24 +215,42 @@ def main(
         # Sample batch
         batch = random.sample(train_data, min(args.batch_size, len(train_data)))
 
+        # Pre-realize edges for all batch items (must be on main thread for autograd)
+        batch_edges = []
+        for item in batch:
+            adjacency, log_probs = graph.realize_graph()
+            batch_edges.append((item, adjacency, log_probs))
+
+        # Process batch items concurrently (LLM calls are I/O-bound)
+        def _process_item(item, adjacency, log_probs):
+            query = get_query_fn(item)
+            item_id = get_item_id_fn(item)
+            result = graph.forward_with_adjacency(
+                query=query, item_id=item_id, adjacency=adjacency,
+            )
+            is_correct, feedback = evaluate_fn(result.final_response, item)
+            return item_id, result, log_probs, is_correct, feedback
+
         utilities = []
         edge_log_probs_list = []
 
-        for item in batch:
-            query = get_query_fn(item)
-            item_id = get_item_id_fn(item)
+        with ThreadPoolExecutor(max_workers=args.batch_size) as pool:
+            futures = {
+                pool.submit(_process_item, item, adj, lp): idx
+                for idx, (item, adj, lp) in enumerate(batch_edges)
+            }
+            # Collect results in submission order
+            results_by_idx = {}
+            for future in as_completed(futures):
+                idx = futures[future]
+                results_by_idx[idx] = future.result()
 
-            result, edge_log_probs = graph.forward(
-                query=query, item_id=item_id, deterministic=False,
-            )
-
-            # Evaluate
-            is_correct, feedback = evaluate_fn(result.final_response, item)
+        for idx in range(len(batch_edges)):
+            item_id, result, log_probs, is_correct, feedback = results_by_idx[idx]
             utility = 1.0 if is_correct else 0.0
             utilities.append(utility)
-            edge_log_probs_list.append(edge_log_probs)
+            edge_log_probs_list.append(log_probs.sum())
 
-            # Write telemetry
             writer.append_rows([{
                 "run_id": run_id,
                 "dataset": default_dataset,
@@ -246,7 +265,7 @@ def main(
                 "num_active_edges": result.num_active_edges,
                 "num_nodes_succeeded": result.num_nodes_succeeded,
                 "num_nodes_failed": result.num_nodes_failed,
-                "reinforce_loss": 0.0,  # filled after train_step
+                "reinforce_loss": 0.0,
                 "baseline": trainer.baseline,
                 "edge_probs_json": _edge_probs_json(graph),
                 "metrics_snapshot_json": _metrics_snapshot(),
@@ -267,38 +286,46 @@ def main(
             val_correct = 0
             val_total = 0
 
-            for item in val_data:
+            # Deterministic adjacency (same for all val items)
+            with torch.no_grad():
+                det_adjacency = graph.realize_graph_deterministic()
+
+            def _val_item(item):
                 query = get_query_fn(item)
                 item_id = get_item_id_fn(item)
-
-                with torch.no_grad():
-                    result, _ = graph.forward(
-                        query=query, item_id=item_id, deterministic=True,
-                    )
-
+                result = graph.forward_with_adjacency(
+                    query=query, item_id=item_id, adjacency=det_adjacency,
+                )
                 is_correct, feedback = evaluate_fn(result.final_response, item)
-                val_correct += int(is_correct)
-                val_total += 1
+                return item_id, result, is_correct, feedback
 
-                writer.append_rows([{
-                    "run_id": run_id,
-                    "dataset": default_dataset,
-                    "record_type": "val",
-                    "iteration": iteration,
-                    "phase": "val",
-                    "item_id": item_id,
-                    "quality_is_correct": is_correct,
-                    "quality_feedback": feedback,
-                    "total_latency_seconds": result.total_latency,
-                    "aggregator_latency_seconds": result.aggregator_latency,
-                    "num_active_edges": result.num_active_edges,
-                    "num_nodes_succeeded": result.num_nodes_succeeded,
-                    "num_nodes_failed": result.num_nodes_failed,
-                    "reinforce_loss": loss,
-                    "baseline": trainer.baseline,
-                    "edge_probs_json": _edge_probs_json(graph),
-                    "metrics_snapshot_json": _metrics_snapshot(),
-                }])
+            val_concurrency = min(8, len(val_data))
+            with ThreadPoolExecutor(max_workers=val_concurrency) as pool:
+                val_futures = [pool.submit(_val_item, item) for item in val_data]
+                for future in val_futures:
+                    item_id, result, is_correct, feedback = future.result()
+                    val_correct += int(is_correct)
+                    val_total += 1
+
+                    writer.append_rows([{
+                        "run_id": run_id,
+                        "dataset": default_dataset,
+                        "record_type": "val",
+                        "iteration": iteration,
+                        "phase": "val",
+                        "item_id": item_id,
+                        "quality_is_correct": is_correct,
+                        "quality_feedback": feedback,
+                        "total_latency_seconds": result.total_latency,
+                        "aggregator_latency_seconds": result.aggregator_latency,
+                        "num_active_edges": result.num_active_edges,
+                        "num_nodes_succeeded": result.num_nodes_succeeded,
+                        "num_nodes_failed": result.num_nodes_failed,
+                        "reinforce_loss": loss,
+                        "baseline": trainer.baseline,
+                        "edge_probs_json": _edge_probs_json(graph),
+                        "metrics_snapshot_json": _metrics_snapshot(),
+                    }])
 
             val_acc = val_correct / val_total if val_total else 0.0
             logger.info(
@@ -324,8 +351,16 @@ def main(
                 iteration, int(active), int(total), probs,
             )
 
+    # ── Save last checkpoint ─────────────────────────────────────────────────
+    last_checkpoint_path = os.path.join(
+        checkpoint_dir, f"gptswarm_{default_dataset}_last.pt"
+    )
+    trainer.save_checkpoint(last_checkpoint_path)
+    logger.info("Saved last checkpoint: {}", last_checkpoint_path)
+
     # ── Final summary ─────────────────────────────────────────────────────────
     logger.info("GPTSwarm {} training complete.", default_dataset)
     logger.info("Best val accuracy: {:.1%}", trainer.best_val_accuracy)
     logger.info("Best checkpoint: {}", best_checkpoint_path)
+    logger.info("Last checkpoint: {}", last_checkpoint_path)
     logger.info("Final edge probabilities:\n{}", graph.edge_probabilities())

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=test_im_mbpp
-#SBATCH --output=logs/test/mbpp/slurm-%j-inframind.out
-#SBATCH --error=logs/test/mbpp/slurm-%j-inframind.err
+#SBATCH --output=logs/test/mbpp/inframind/slurm-%j-inframind.out
+#SBATCH --error=logs/test/mbpp/inframind/slurm-%j-inframind.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
@@ -12,16 +12,16 @@
 
 # =========================================================================
 # InfraMind — Test Sweep for MBPP
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
-#   Budgets:       10, 30, 50, 100, 200, 300, 600, 1000 seconds
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching training)
+#   Budgets:       30, 50, 100, 200, 300 seconds (matching training tiers)
 #   max_num_seqs=16
 #   Each (arrival_rate, budget) pair is a separate sweep with fixed budget.
 #   vLLM is drained between each config via _wait_for_vllm_drain().
 #
-#   Total: 6 rates x 8 budgets x 500 items = 24,000 episodes (48 sweeps)
+#   Total: 5 rates x 5 budgets x 500 items = 12,500 episodes (25 sweeps)
 #
 #   Output CSV:
-#     logs/test/mbpp/inframind_mbpp_test.csv
+#     logs/test/mbpp/inframind/inframind_mbpp_test.csv
 # =========================================================================
 
 echo "========================================="
@@ -49,22 +49,22 @@ export CODE_EXECUTION_TIMEOUT="10"
 export VLLM_MAX_NUM_SEQS=16
 
 # Ensure log directory exists
-mkdir -p logs/test/mbpp
+mkdir -p logs/test/mbpp/inframind
 
 # ===== Run settings =====
 TEST_LIMIT=500
 CONCURRENCY=1000
-ARRIVAL_RATES_CSV="10,30,50,100,150,200"
-BUDGET_SWEEP="10,30,50,100,200,300,600,1000"
+ARRIVAL_RATES_CSV="10,30,50,100,200"
+BUDGET_SWEEP="30,50,100,200,300"
 ARRIVAL_PATTERN="poisson"
 
 # ===== Paths =====
 # TODO: Update checkpoint path after InfraMind training completes
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_mbpp_best.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost0.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_mbpp_train_374_cost5.pth"
 
 # ===== Output =====
-OUTPUT_CSV="logs/test/mbpp/inframind_mbpp_test.csv"
+OUTPUT_CSV="logs/test/mbpp/inframind/inframind_mbpp_test.csv"
 
 # ===== Validation =====
 for f in "$CHECKPOINT" "$MAS_CHECKPOINT"; do
