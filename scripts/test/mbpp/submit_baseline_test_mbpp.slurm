@@ -1,26 +1,26 @@
 #!/bin/bash
 #SBATCH --job-name=test_bl_mbpp
-#SBATCH --output=logs/test/mbpp/slurm-%j-baseline.out
-#SBATCH --error=logs/test/mbpp/slurm-%j-baseline.err
+#SBATCH --output=logs/test/mbpp/mas/slurm-%j-mas.out
+#SBATCH --error=logs/test/mbpp/mas/slurm-%j-mas.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=18:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
 # Baseline MAS Router — Test Sweep for MBPP
-#   Cost rates:    0, 100, 400, 700  (one checkpoint each)
+#   Cost rates:    5, 10, 15  (one checkpoint each)
 #   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
 #   max_num_seqs=16
 #   vLLM is drained between each (cost_rate, arrival_rate) config.
 #
-#   Total: 4 cost_rates x 6 arrival_rates x 500 items = 12,000 episodes
+#   Total: 3 cost_rates x 6 arrival_rates x 500 items = 9,000 episodes
 #
 #   Output CSV:
-#     logs/test/mbpp/baseline_mbpp_test.csv
+#     logs/test/mbpp/baseline_mbpp_test_5_10_15.csv
 # =========================================================================
 
 echo "========================================="
@@ -48,12 +48,12 @@ export CODE_EXECUTION_TIMEOUT="10"
 export VLLM_MAX_NUM_SEQS=16
 
 # Ensure log directory exists
-mkdir -p logs/test/mbpp
+mkdir -p logs/test/mbpp/mas
 
 # ===== Run settings =====
 TEST_LIMIT=500
 CONCURRENCY=1000
-COST_RATES=(0 100 400 700)
+COST_RATES=(5 10 15)
 ARRIVAL_RATES=(10 30 50 100 150 200)
 ARRIVAL_PATTERN="poisson"
 
@@ -65,7 +65,7 @@ CONFIG_FILE="${REPO_ROOT}/Experiments/dataset_config.json"
 TRAIN_LIMIT=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}'))['mbpp']['train_limit'])")
 
 # ===== Output CSV =====
-OUTPUT_CSV="logs/test/mbpp/baseline_mbpp_test.csv"
+OUTPUT_CSV="logs/test/mbpp/mas/mas_mbpp_test_5_10_15.csv"
 
 # ===== Validation =====
 for cost in "${COST_RATES[@]}"; do
@@ -165,7 +165,7 @@ TOTAL_CONFIGS=$(( ${#COST_RATES[@]} * ${#ARRIVAL_RATES[@]} ))
 echo "========================================="
 echo "Baseline MAS Router — MBPP Test Sweep"
 echo "========================================="
-echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_mbpp_train_${TRAIN_LIMIT}_cost{0,100,400,700}.pth"
+echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_mbpp_train_${TRAIN_LIMIT}_cost{5,10,15}.pth"
 echo "Cost rates:      ${COST_RATES[*]}"
 echo "Arrival rates:   ${ARRIVAL_RATES[*]}"
 echo "Pattern:         ${ARRIVAL_PATTERN}"

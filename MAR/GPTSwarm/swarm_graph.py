@@ -172,33 +172,27 @@ class SwarmGraph(nn.Module):
             request_timeout=self.request_timeout,
         )
 
-    def forward(
+    def _execute_graph(
         self,
         query: str,
-        item_id: str = "",
-        deterministic: bool = False,
-    ) -> Tuple[SwarmResult, Optional[torch.Tensor]]:
-        """Execute the swarm graph for a single query.
+        item_id: str,
+        adjacency: torch.Tensor,
+    ) -> SwarmResult:
+        """Execute the swarm graph with a given adjacency matrix.
+
+        Nodes execute sequentially in index order; each node receives context
+        from connected predecessor nodes. Thread-safe (uses ALLChat clients).
 
         Args:
             query: The task/question text.
             item_id: Identifier for telemetry.
-            deterministic: If True, use threshold at 0.5 instead of sampling.
+            adjacency: Binary N x N adjacency tensor.
 
         Returns:
-            result: SwarmResult with all node outputs and aggregated response.
-            edge_log_probs: Sum of log probs for sampled edges (None if deterministic).
+            SwarmResult with all node outputs and aggregated response.
         """
         result = SwarmResult(query=query, item_id=item_id)
         total_start = time.perf_counter()
-
-        # Realize edges
-        if deterministic:
-            adjacency = self.realize_graph_deterministic()
-            edge_log_probs_sum = None
-        else:
-            adjacency, log_probs = self.realize_graph()
-            edge_log_probs_sum = log_probs.sum()
 
         # Record realized edges
         N = self.num_nodes
@@ -210,13 +204,11 @@ class SwarmGraph(nn.Module):
         # Execute nodes in index order (sequential DAG execution)
         node_outputs: Dict[int, str] = {}
         for idx, node in enumerate(self.node_configs):
-            # Collect outputs from predecessor nodes with active edges
             predecessors = []
             for pred_idx in range(idx):
                 if adjacency[pred_idx, idx] > 0.5 and pred_idx in node_outputs:
                     predecessors.append(node_outputs[pred_idx])
 
-            # Build messages for this node
             messages = get_node_prompt(
                 domain=self.domain,
                 operation=node.operation,
@@ -224,7 +216,6 @@ class SwarmGraph(nn.Module):
                 predecessor_outputs=predecessors if predecessors else None,
             )
 
-            # Call the node
             node_start = time.perf_counter()
             try:
                 response = self._call_node(node, messages)
@@ -262,4 +253,53 @@ class SwarmGraph(nn.Module):
             result.final_response = ""
 
         result.total_latency = time.perf_counter() - total_start
-        return result, edge_log_probs_sum
+        return result
+
+    def forward_with_adjacency(
+        self,
+        query: str,
+        item_id: str = "",
+        adjacency: Optional[torch.Tensor] = None,
+    ) -> SwarmResult:
+        """Execute the graph with a pre-realized adjacency matrix.
+
+        Used for concurrent training (edge sampling on main thread,
+        LLM execution on worker threads).
+
+        Args:
+            query: The task/question text.
+            item_id: Identifier for telemetry.
+            adjacency: Pre-realized binary adjacency tensor.
+
+        Returns:
+            SwarmResult with all node outputs and aggregated response.
+        """
+        if adjacency is None:
+            adjacency = self.realize_graph_deterministic()
+        return self._execute_graph(query, item_id, adjacency)
+
+    def forward(
+        self,
+        query: str,
+        item_id: str = "",
+        deterministic: bool = False,
+    ) -> Tuple[SwarmResult, Optional[torch.Tensor]]:
+        """Execute the swarm graph for a single query.
+
+        Args:
+            query: The task/question text.
+            item_id: Identifier for telemetry.
+            deterministic: If True, use threshold at 0.5 instead of sampling.
+
+        Returns:
+            result: SwarmResult with all node outputs and aggregated response.
+            edge_log_probs: Sum of log probs for sampled edges (None if deterministic).
+        """
+        if deterministic:
+            adjacency = self.realize_graph_deterministic()
+            result = self._execute_graph(query, item_id, adjacency)
+            return result, None
+        else:
+            adjacency, log_probs = self.realize_graph()
+            result = self._execute_graph(query, item_id, adjacency)
+            return result, log_probs.sum()

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=test_im_math
-#SBATCH --output=logs/test/math/slurm-%j-inframind.out
-#SBATCH --error=logs/test/math/slurm-%j-inframind.err
+#SBATCH --output=logs/test/math/inframind/slurm-%j-inframind.out
+#SBATCH --error=logs/test/math/inframind/slurm-%j-inframind.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
@@ -56,7 +56,7 @@ export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
 export VLLM_MAX_NUM_SEQS=16
 
 # Ensure log directory exists
-mkdir -p logs/test/math
+mkdir -p logs/test/math/inframind
 
 # ===== Run settings (matching training config) =====
 TEST_LIMIT=500
@@ -70,7 +70,7 @@ CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_math_2026022
 MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_math_train_519_cost0.pth"
 
 # ===== Output =====
-OUTPUT_CSV="logs/test/math/inframind_math_test.csv"
+OUTPUT_CSV="logs/test/math/inframind/inframind_math_test.csv"
 
 # ===== Validation =====
 for f in "$CHECKPOINT" "$MAS_CHECKPOINT"; do

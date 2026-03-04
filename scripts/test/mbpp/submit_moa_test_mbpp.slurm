@@ -13,14 +13,14 @@
 # =========================================================================
 # MoA (Mixture of Agents) — Test Sweep for MBPP
 #   No checkpoint needed (inference-only, all models propose + aggregate)
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching InfraMind training)
 #   max_num_seqs=16
 #   vLLM is drained between each arrival rate.
 #
-#   Total: 6 arrival_rates x 500 items = 3,000 episodes
+#   Total: 5 arrival_rates x 500 items = 2,500 episodes
 #
 #   Output CSV:
-#     logs/test/mbpp/moa_mbpp_test.csv
+#     logs/test/mbpp/moa/moa_mbpp_test.csv
 # =========================================================================
 
 echo "========================================="
@@ -50,7 +50,7 @@ mkdir -p logs/test/mbpp/moa
 # ===== Run settings =====
 TEST_LIMIT=500
 CONCURRENCY=1000
-ARRIVAL_RATES=(10 30 50 100 150 200)
+ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 
 OUTPUT_CSV="logs/test/mbpp/moa/moa_mbpp_test.csv"
