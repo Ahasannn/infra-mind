@@ -189,6 +189,8 @@ BASELINE_TEST_FIELDS = (
     "llm_e2e_avg",
     "llm_queue_avg",
     "llm_inference_avg",
+    # Router training hyperparameter
+    "cost_rate",
 )
 
 
@@ -594,6 +596,7 @@ if __name__ == '__main__':
                     "llm_elapsed_seconds": l_elapsed,
                     "arrival_rate": arrival_rate,
                     "arrival_pattern": args.arrival_pattern,
+                    "cost_rate": args.cost_rate,
                 })
                 for step in transitions:
                     csv_rows.append({
@@ -609,6 +612,7 @@ if __name__ == '__main__':
                         "llm_elapsed_seconds": l_elapsed,
                         "arrival_rate": arrival_rate,
                         "arrival_pattern": args.arrival_pattern,
+                        "cost_rate": args.cost_rate,
                         "step_index": step.get("step_index", ""),
                         "round_index": step.get("round_index", ""),
                         "dep_level": step.get("dep_level", ""),

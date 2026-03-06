@@ -173,6 +173,7 @@ BASELINE_TEST_FIELDS = (
     "llm_elapsed_seconds",
     "arrival_rate",
     "arrival_pattern",
+    "cost_rate",
     # Step-level fields (for step records)
     "step_index",
     "round_index",
@@ -596,6 +597,7 @@ if __name__ == '__main__':
                     "llm_elapsed_seconds": l_elapsed,
                     "arrival_rate": arrival_rate,
                     "arrival_pattern": args.arrival_pattern,
+                    "cost_rate": args.cost_rate,
                 })
                 for step in transitions:
                     csv_rows.append({
@@ -611,6 +613,7 @@ if __name__ == '__main__':
                         "llm_elapsed_seconds": l_elapsed,
                         "arrival_rate": arrival_rate,
                         "arrival_pattern": args.arrival_pattern,
+                        "cost_rate": args.cost_rate,
                         "step_index": step.get("step_index", ""),
                         "round_index": step.get("round_index", ""),
                         "dep_level": step.get("dep_level", ""),

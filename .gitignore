@@ -25,3 +25,4 @@ __pycache__/
 build/
 dist/
 .claude/.nfs00000002339d2c3300000139
+temp_markdowns/
