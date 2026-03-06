@@ -5,7 +5,7 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=18:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
@@ -13,11 +13,11 @@
 # =========================================================================
 # GPTSwarm — Test Sweep for MBPP
 #   Requires trained checkpoint with learned edge logits.
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching InfraMind training)
 #   max_num_seqs=16
 #   vLLM is drained between each arrival rate.
 #
-#   Total: 6 arrival_rates x 500 items = 3,000 episodes
+#   Total: 5 arrival_rates x 500 items = 2,500 episodes
 #
 #   Output CSV:
 #     logs/test/mbpp/gptswarm/gptswarm_mbpp_test.csv
@@ -50,7 +50,7 @@ mkdir -p logs/test/mbpp/gptswarm
 # ===== Run settings =====
 TEST_LIMIT=500
 CONCURRENCY=1000
-ARRIVAL_RATES=(10 30 50 100 150 200)
+ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/gptswarm/gptswarm_mbpp_best.pt"
