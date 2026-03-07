@@ -5,15 +5,15 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=08:00:00
+#SBATCH --time=12:00:00
 #SBATCH --mem=64G
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
 # Baseline MAS Router training for HumanEval dataset
 #   Small dataset: 164 total (33 train / 131 test with split-ratio 0.2)
-#   Trains sequentially with cost_rates: 0, 100, 400, 700
+#   Trains sequentially with cost_rates: 5, 10, 15
 #   10 epochs each (more epochs for tiny dataset)
 #   Batch size 16 (smaller for small dataset)
 # =========================================================================
@@ -96,7 +96,10 @@ EPOCHS=10
 BATCH_SIZE=16
 LR=0.01
 SPLIT_RATIO=0.2
-COST_RATES=(0 100 400 700)
+COST_RATES=(5 10 15)
+
+# Drain vLLM between cost rates (match MBPP pattern)
+export VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-16}"
 
 echo "========================================="
 echo "Baseline MAS Training — HumanEval"

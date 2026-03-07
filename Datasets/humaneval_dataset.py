@@ -1,12 +1,13 @@
 from typing import Union, Literal
+import json
+import os
 import pandas as pd
-from datasets import load_dataset
 
 
 class HumanEvalDataset:
     def __init__(self, split: Union[Literal['train'], Literal['test']], split_ratio: float = 0.2, seed: int = 42, limit: int = 0):
         """
-        HumanEval dataset loader that auto-downloads from Hugging Face.
+        HumanEval dataset loader that reads from local JSONL file.
 
         Args:
             split: 'train' or 'test' split
@@ -14,11 +15,12 @@ class HumanEvalDataset:
             seed: Random seed for reproducible splits
             limit: If > 0, limit to this many items after split (deterministic)
         """
-        # Load the full dataset from Hugging Face
-        dataset = load_dataset('openai_humaneval', split='test')
+        # Load from local JSONL file
+        jsonl_path = os.path.join(os.path.dirname(__file__), 'humaneval', 'humaneval-py.jsonl')
+        with open(jsonl_path, 'r') as f:
+            records = [json.loads(line) for line in f if line.strip()]
 
-        # Convert to pandas DataFrame for easier manipulation
-        df = pd.DataFrame(dataset)
+        df = pd.DataFrame(records)
 
         # Shuffle with seed for reproducibility
         df = df.sample(frac=1, random_state=seed).reset_index(drop=True)

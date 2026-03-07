@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=test_bl_heval
-#SBATCH --output=logs/test/humaneval/slurm-%j-baseline.out
-#SBATCH --error=logs/test/humaneval/slurm-%j-baseline.err
+#SBATCH --output=logs/test/humaneval/mas/slurm-%j-mas.out
+#SBATCH --error=logs/test/humaneval/mas/slurm-%j-mas.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=12:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
@@ -13,15 +13,15 @@
 # =========================================================================
 # Baseline MAS Router — Test Sweep for HumanEval
 #   Small dataset: 131 test items (split-ratio 0.2)
-#   Cost rates:    0, 100, 400, 700  (one checkpoint each)
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
+#   Cost rates:    5, 10, 15  (one checkpoint each, matching MBPP)
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching MBPP)
 #   max_num_seqs=16
 #   vLLM is drained between each (cost_rate, arrival_rate) config.
 #
-#   Total: 4 cost_rates x 6 arrival_rates x 131 items = 3,144 episodes
+#   Total: 3 cost_rates x 5 arrival_rates x 131 items = 1,965 episodes
 #
 #   Output CSV:
-#     logs/test/humaneval/baseline_humaneval_test.csv
+#     logs/test/humaneval/mas/mas_humaneval_test_5_10_15.csv
 # =========================================================================
 
 echo "========================================="
@@ -49,14 +49,14 @@ export CODE_EXECUTION_TIMEOUT="10"
 export VLLM_MAX_NUM_SEQS=16
 
 # Ensure log directory exists
-mkdir -p logs/test/humaneval
+mkdir -p logs/test/humaneval/mas
 
 # ===== Run settings =====
 TEST_LIMIT=131
 SPLIT_RATIO=0.2
 CONCURRENCY=1000
-COST_RATES=(0 100 400 700)
-ARRIVAL_RATES=(10 30 50 100 150 200)
+COST_RATES=(5 10 15)
+ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 
 # ===== Checkpoint directory =====
@@ -67,7 +67,7 @@ CONFIG_FILE="${REPO_ROOT}/Experiments/dataset_config.json"
 TRAIN_LIMIT=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}'))['humaneval']['train_limit'])")
 
 # ===== Output CSV =====
-OUTPUT_CSV="logs/test/humaneval/baseline_humaneval_test.csv"
+OUTPUT_CSV="logs/test/humaneval/mas/mas_humaneval_test_5_10_15.csv"
 
 # ===== Validation =====
 for cost in "${COST_RATES[@]}"; do
@@ -167,7 +167,7 @@ TOTAL_CONFIGS=$(( ${#COST_RATES[@]} * ${#ARRIVAL_RATES[@]} ))
 echo "========================================="
 echo "Baseline MAS Router — HumanEval Test Sweep"
 echo "========================================="
-echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_humaneval_train_${TRAIN_LIMIT}_cost{0,100,400,700}.pth"
+echo "Checkpoints:     ${CHECKPOINT_DIR}/mas_humaneval_train_${TRAIN_LIMIT}_cost{5,10,15}.pth"
 echo "Cost rates:      ${COST_RATES[*]}"
 echo "Arrival rates:   ${ARRIVAL_RATES[*]}"
 echo "Pattern:         ${ARRIVAL_PATTERN}"

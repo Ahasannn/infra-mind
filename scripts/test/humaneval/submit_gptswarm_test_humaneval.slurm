@@ -5,15 +5,15 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=18:00:00
+#SBATCH --time=04:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
 # GPTSwarm — Test Sweep for HumanEval
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
-#   Total: 6 arrival_rates x 131 items = 786 episodes
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching MBPP)
+#   Total: 5 arrival_rates x 131 items = 655 episodes
 #   Output CSV: logs/test/humaneval/gptswarm/gptswarm_humaneval_test.csv
 # =========================================================================
 
@@ -39,7 +39,7 @@ mkdir -p logs/test/humaneval/gptswarm
 
 TEST_LIMIT=131
 CONCURRENCY=1000
-ARRIVAL_RATES=(10 30 50 100 150 200)
+ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/gptswarm/gptswarm_humaneval_best.pt"

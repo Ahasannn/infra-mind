@@ -1,28 +1,28 @@
 #!/bin/bash
 #SBATCH --job-name=test_im_heval
-#SBATCH --output=logs/test/humaneval/slurm-%j-inframind.out
-#SBATCH --error=logs/test/humaneval/slurm-%j-inframind.err
+#SBATCH --output=logs/test/humaneval/inframind/slurm-%j-inframind.out
+#SBATCH --error=logs/test/humaneval/inframind/slurm-%j-inframind.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=24:00:00
-#SBATCH --mem=64G
+#SBATCH --time=16:00:00
+#SBATCH --mem=128G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
 # InfraMind — Test Sweep for HumanEval
 #   Small dataset: 131 test items (split-ratio 0.2)
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
-#   Budgets:       10, 30, 50, 100, 200, 300, 600, 1000 seconds
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching MBPP)
+#   Budgets:       30, 50, 100, 200, 300 seconds (matching MBPP)
 #   max_num_seqs=16
 #   Each (arrival_rate, budget) pair is a separate sweep with fixed budget.
 #   vLLM is drained between each config via _wait_for_vllm_drain().
 #
-#   Total: 6 rates x 8 budgets x 131 items = 6,288 episodes (48 sweeps)
+#   Total: 5 rates x 5 budgets x 131 items = 3,275 episodes (25 sweeps)
 #
 #   Output CSV:
-#     logs/test/humaneval/inframind_humaneval_test.csv
+#     logs/test/humaneval/inframind/inframind_humaneval_test.csv
 # =========================================================================
 
 echo "========================================="
@@ -50,24 +50,24 @@ export CODE_EXECUTION_TIMEOUT="10"
 export VLLM_MAX_NUM_SEQS=16
 
 # Ensure log directory exists
-mkdir -p logs/test/humaneval
+mkdir -p logs/test/humaneval/inframind
 
 # ===== Run settings =====
 TEST_LIMIT=131
 SPLIT_RATIO=0.2
 CONCURRENCY=1000
-ARRIVAL_RATES_CSV="10,30,50,100,150,200"
-BUDGET_SWEEP="10,30,50,100,200,300,600,1000"
+ARRIVAL_RATES_CSV="10,30,50,100,200"
+BUDGET_SWEEP="30,50,100,200,300"
 ARRIVAL_PATTERN="poisson"
 
 # ===== Paths =====
 DATASET_PATH="${BLUE_STORAGE}/datasets/humaneval/humaneval-py.jsonl"
 # TODO: Update checkpoint path after InfraMind training completes
 CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_humaneval_best.pt"
-MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_humaneval_train_33_cost0.pth"
+MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_humaneval_train_33_cost5.pth"
 
 # ===== Output =====
-OUTPUT_CSV="logs/test/humaneval/inframind_humaneval_test.csv"
+OUTPUT_CSV="logs/test/humaneval/inframind/inframind_humaneval_test.csv"
 
 # ===== Validation =====
 for f in "$CHECKPOINT" "$MAS_CHECKPOINT"; do

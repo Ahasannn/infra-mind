@@ -5,7 +5,7 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=12:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
