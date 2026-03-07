@@ -1,14 +1,12 @@
-"""MoA (Mixture of Agents) baseline — HumanEval dataset."""
+"""Puppeteer baseline — MATH dataset."""
 
 import sys
 import os
 import io
 import time
 import argparse
-import re
 import json
 import threading
-from collections import Counter
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -16,8 +14,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 from loguru import logger
 
 from MAR.LLM.llm_profile_full import llm_profile, model_base_urls
-from MAR.MoA.moa_runner import MoARunner
-from MAR.Tools.coding.python_executor import PyExecutor
+from MAR.Puppeteer.puppeteer_runner import PuppeteerRunner
 from MAR.Utils.utils import fix_random_seed
 from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
@@ -25,19 +22,18 @@ from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
 from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 
-from Datasets.humaneval_dataset import HumanEvalDataset
+from Datasets.math_dataset import load_math_dataset, MATH_is_correct, MATH_get_predict
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-MOA_TEST_FIELDS = (
+PUPPETEER_TEST_FIELDS = (
     "run_id", "dataset", "item_id", "record_type",
     "quality_is_correct", "quality_feedback",
-    "total_latency_seconds", "proposer_latency_max_seconds",
-    "proposer_latency_min_seconds", "aggregator_latency_seconds",
+    "total_latency_seconds", "num_steps",
+    "num_steps_succeeded", "num_steps_failed",
+    "step_models_json", "step_latencies_json",
     "arrival_rate", "arrival_pattern",
-    "num_proposers_succeeded", "num_proposers_failed",
-    "proposer_latencies_json", "proposer_errors_json",
-    "aggregator_model", "metrics_snapshot_json",
+    "metrics_snapshot_json",
 )
 
 
@@ -61,13 +57,13 @@ def _metrics_snapshot() -> str:
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="MoA baseline — HumanEval")
+    p = argparse.ArgumentParser(description="Puppeteer baseline — MATH")
     p.add_argument("--test_limit", type=int, default=0)
-    p.add_argument("--aggregator-model", type=str,
-                    default="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
+    p.add_argument("--dataset-root", type=str, default="Datasets/MATH")
+    p.add_argument("--checkpoint", type=str, default="")
+    p.add_argument("--max-steps", type=int, default=5)
     p.add_argument("--max-tokens", type=int, default=2048)
     p.add_argument("--temperature", type=float, default=0.7)
-    p.add_argument("--aggregator-temperature", type=float, default=0.3)
     p.add_argument("--request-timeout", type=float, default=600.0)
     p.add_argument("--arrival-rate", type=float, nargs="+", default=[0.0])
     p.add_argument("--arrival-pattern", type=str, default="poisson")
@@ -82,24 +78,24 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     fix_random_seed(1234)
-    domain = "humaneval"
+    domain = "math"
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-    configure_logging(log_name=f"moa_{domain}_{current_time}.txt")
+    configure_logging(log_name=f"puppeteer_{domain}_{current_time}.txt")
     run_id = current_time
 
     test_limit = args.test_limit if args.test_limit > 0 else 0
-    test_dataset = HumanEvalDataset("test", limit=test_limit)
-    logger.info("MoA HumanEval: {} test items", len(test_dataset))
+    test_data = load_math_dataset(args.dataset_root, "test", stratified_limit=test_limit)
+    logger.info("Puppeteer MATH: {} test items", len(test_data))
 
     model_names = [m["Name"] for m in llm_profile]
-    runner = MoARunner(
+    runner = PuppeteerRunner(
         model_names=model_names,
-        aggregator_model=args.aggregator_model,
+        checkpoint_path=args.checkpoint or None,
         domain=domain,
+        max_steps=args.max_steps,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
-        aggregator_temperature=args.aggregator_temperature,
         request_timeout=args.request_timeout,
     )
 
@@ -107,12 +103,10 @@ if __name__ == "__main__":
     if metrics_url_map:
         start_metrics_watcher(metrics_url_map, interval=1.0)
 
-    telemetry_csv = args.test_telemetry_csv or f"logs/test/{domain}/moa/moa_{domain}_{current_time}.csv"
+    telemetry_csv = args.test_telemetry_csv or f"logs/test/{domain}/puppeteer/puppeteer_{domain}_{current_time}.csv"
     os.makedirs(os.path.dirname(telemetry_csv), exist_ok=True)
-    writer = CsvTelemetryWriter(telemetry_csv, fieldnames=MOA_TEST_FIELDS)
+    writer = CsvTelemetryWriter(telemetry_csv, fieldnames=PUPPETEER_TEST_FIELDS)
     logger.info("Telemetry CSV: {}", telemetry_csv)
-
-    code_pattern = re.compile(r"```python.*?```", re.DOTALL | re.MULTILINE)
 
     arrival_rates = args.arrival_rate if isinstance(args.arrival_rate, list) else [args.arrival_rate]
 
@@ -122,8 +116,8 @@ if __name__ == "__main__":
         _ctr_lock = threading.Lock()
 
         progress = ProgressTracker(
-            total=len(test_dataset),
-            phase=f"MoA Test (rate={arrival_rate})",
+            total=len(test_data),
+            phase=f"Puppeteer Test (rate={arrival_rate})",
             log_interval=10,
         )
 
@@ -139,28 +133,25 @@ if __name__ == "__main__":
             if not r.success or r.output is None:
                 return
             payload = r.output
-            moa = payload["moa"]
+            pup = payload["puppeteer"]
             with _ctr_lock:
                 counters["executed"] += 1
                 counters["solved"] += int(payload["is_solved"])
                 progress.total_quality += float(payload["is_solved"])
-                progress.total_latency += moa.total_latency
+                progress.total_latency += pup.total_latency
             writer.append_rows([{
                 "run_id": run_id, "dataset": domain,
                 "item_id": payload["item_id"], "record_type": "episode",
                 "quality_is_correct": payload["is_solved"],
                 "quality_feedback": payload["feedback"],
-                "total_latency_seconds": moa.total_latency,
-                "proposer_latency_max_seconds": moa.proposer_latency_max,
-                "proposer_latency_min_seconds": moa.proposer_latency_min,
-                "aggregator_latency_seconds": moa.aggregator_latency,
+                "total_latency_seconds": pup.total_latency,
+                "num_steps": pup.num_steps,
+                "num_steps_succeeded": pup.num_steps_succeeded,
+                "num_steps_failed": pup.num_steps_failed,
+                "step_models_json": json.dumps(pup.step_models),
+                "step_latencies_json": json.dumps(pup.step_latencies),
                 "arrival_rate": arrival_rate,
                 "arrival_pattern": args.arrival_pattern,
-                "num_proposers_succeeded": moa.num_succeeded,
-                "num_proposers_failed": moa.num_failed,
-                "proposer_latencies_json": json.dumps(moa.proposer_latencies),
-                "proposer_errors_json": json.dumps(moa.proposer_errors) if moa.proposer_errors else "",
-                "aggregator_model": args.aggregator_model,
                 "metrics_snapshot_json": _metrics_snapshot(),
             }])
 
@@ -170,40 +161,40 @@ if __name__ == "__main__":
             on_result=on_result,
         )
 
-        def handler(row):
-            query = row["prompt"]
-            test = row["test"]
-            item_id = str(row.get("task_id", ""))
+        def handler(item):
+            query = item["problem"]
+            true_answer = item["solution"]
+            item_id = str(item.get("id", ""))
 
-            moa = runner.run_single(query=query, item_id=item_id)
+            pup = runner.run_single(query=query, item_id=item_id)
 
-            result_text = moa.aggregated_response
-            match = code_pattern.search(result_text)
-            if match:
-                code = match.group(0).lstrip("```python\n").rstrip("\n```")
-                is_solved, feedback, state = PyExecutor().execute(code, [test], timeout=100)
-            else:
-                is_solved = 0
-                feedback = "No python code block found in aggregated response."
+            try:
+                predict = MATH_get_predict(pup.final_response)
+                is_solved = MATH_is_correct(predict, true_answer)
+            except Exception as e:
+                logger.warning("Answer parsing failed for {}: {}", item_id, e)
+                predict = "0"
+                is_solved = False
+
+            gold = MATH_get_predict(true_answer) if true_answer else "0"
 
             return {
                 "item_id": item_id,
-                "is_solved": bool(is_solved),
-                "feedback": feedback,
-                "moa": moa,
+                "is_solved": is_solved,
+                "feedback": f"pred={predict} gold={gold}",
+                "puppeteer": pup,
             }
 
-        items = test_dataset.df.to_dict("records")
         shooter.run(
-            items, handler=handler,
-            item_id_fn=lambda row, idx: str(row.get("task_id", idx)),
+            test_data, handler=handler,
+            item_id_fn=lambda item, idx: str(item.get("id", idx)),
         )
 
         progress.log_final_summary()
         total_solved = counters["solved"]
         total_executed = counters["executed"]
         accuracy = total_solved / total_executed if total_executed else 0.0
-        logger.info("MoA HumanEval rate={}: {}/{} ({:.1%})",
+        logger.info("Puppeteer MATH rate={}: {}/{} ({:.1%})",
                      arrival_rate, total_solved, total_executed, accuracy)
 
-    logger.info("MoA HumanEval complete.")
+    logger.info("Puppeteer MATH complete.")

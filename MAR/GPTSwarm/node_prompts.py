@@ -343,8 +343,10 @@ _DOMAIN_ALIASES = {
     "mbpp": "code",
     "humaneval": "code",
     "gsm8k": "math",
+    "gsm_hard": "math",
     "math": "math",
     "mmlu": "mmlu",
+    "mmlu_pro": "mmlu",
 }
 
 _AGGREGATE_MAP = {

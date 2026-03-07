@@ -93,8 +93,10 @@ _DOMAIN_MAP = {
     "mbpp": _code_prompt,
     "humaneval": _code_prompt,
     "gsm8k": _math_prompt,
+    "gsm_hard": _math_prompt,
     "math": _math_prompt,
     "mmlu": _mmlu_prompt,
+    "mmlu_pro": _mmlu_prompt,
 }
 
 
