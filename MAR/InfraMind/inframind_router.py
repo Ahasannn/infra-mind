@@ -402,10 +402,10 @@ class InfraMindRouter(nn.Module):
         # equal representation — the executor must condition on BOTH signals
         # jointly (budget × load interaction determines optimal action).
         #   budget: 1 → 16 dims (time pressure signal)
-        #   system: 10 → 16 dims (queue_depths + e2e_avgs, infrastructure load signal)
+        #   system: 15 → 16 dims (queue_depths + e2e_avgs + kv_cache, infrastructure load signal)
         budget_embed_dim = 16
         system_embed_dim = 16
-        system_raw_dim = 2 * self.num_models  # queue_depths(5) + e2e_avgs(5) = 10
+        system_raw_dim = 3 * self.num_models  # queue_depths(5) + e2e_avgs(5) + kv_cache(5) = 15
         self.budget_encoder = nn.Linear(1, budget_embed_dim)
         self.system_encoder = nn.Linear(system_raw_dim, system_embed_dim)
         resource_input_dim = budget_embed_dim + system_embed_dim  # 16 + 16 = 32
@@ -637,16 +637,18 @@ class InfraMindRouter(nn.Module):
     # ------------------------------------------------------------------
 
     def _get_raw_system_metrics(self, dtype: torch.dtype) -> torch.Tensor:
-        """Collect per-model queue depth and e2e latency.
+        """Collect per-model queue depth, e2e latency, and KV cache usage.
 
-        Returns [queue_depth_0, ..., queue_depth_N, e2e_0, ..., e2e_N]
-        where N = number of models.
+        Returns [queue_depth_0, ..., e2e_0, ..., kv_cache_0, ...]
+        where each group has N = number of models.
 
         queue_depth = (running + waiting) / 16  — congestion level (~[0, 2])
         e2e_avg = log1p(e2e) / log(300)         — current throughput (~[0, 1])
+        kv_cache = kv_cache_usage_perc           — GPU memory pressure (~[0, 1])
         """
         queue_depths: List[float] = []
         e2e_avgs: List[float] = []
+        kv_caches: List[float] = []
         for model_name in self.models:
             snap = model_metrics.get(model_name, {})
             n_run = float(snap.get("num_requests_running", 0.0))
@@ -654,7 +656,8 @@ class InfraMindRouter(nn.Module):
             queue_depths.append((n_run + n_wait) / 16.0)
             e2e = float(snap.get("e2e_avg", 0.0))
             e2e_avgs.append(math.log1p(max(e2e, 0.0)) / math.log(300.0))
-        return torch.tensor(queue_depths + e2e_avgs, device=self.device, dtype=dtype)
+            kv_caches.append(float(snap.get("kv_cache_usage_perc", 0.0)))
+        return torch.tensor(queue_depths + e2e_avgs + kv_caches, device=self.device, dtype=dtype)
 
     def assemble_executor_state(
         self,
@@ -665,7 +668,7 @@ class InfraMindRouter(nn.Module):
         # Normalize budget_remaining to [0, 1] via log-scaling.
         norm_budget = math.log(max(budget_remaining, 1.0)) / math.log(300.0)
         budget_tensor = torch.tensor([norm_budget], device=self.device, dtype=query_embedding.dtype)
-        # Raw system metrics: queue_depth(5) + e2e_avg(5) per model = 10 dims
+        # Raw system metrics: queue_depth(5) + e2e_avg(5) + kv_cache(5) per model = 15 dims
         # These replace predicted latencies — direct, uncompressed system signal.
         raw_metrics = self._get_raw_system_metrics(query_embedding.dtype)
         state_tensor = torch.cat([query_embedding, role_embedding, budget_tensor, raw_metrics], dim=0)
@@ -675,20 +678,20 @@ class InfraMindRouter(nn.Module):
         """Dual-pathway forward pass: semantic + resource → merged hidden."""
         emb_dim = self.embedding_dim
         # Split the concatenated state vector:
-        # [query_emb(384), role_emb(384), budget(1), queue_depths(5), e2e_avgs(5)]
+        # [query_emb(384), role_emb(384), budget(1), queue_depths(5), e2e_avgs(5), kv_cache(5)]
         sem_end = 2 * emb_dim
         budget_end = sem_end + 1
 
         semantic_input = state_tensor[..., :sem_end]                # query + role (768)
         budget_input = state_tensor[..., sem_end:budget_end]        # budget (1)
-        system_input = state_tensor[..., budget_end:]               # queue + e2e (10)
+        system_input = state_tensor[..., budget_end:]               # queue + e2e + kv_cache (15)
 
         # Pathway 1: Semantic
         sem_hidden = self.semantic_encoder(semantic_input)           # 768 → 128
 
         # Pathway 2: Resource (budget + system metrics, both with learned expansion)
         budget_emb = self.budget_encoder(budget_input).relu()        # 1 → 16
-        system_emb = self.system_encoder(system_input).relu()        # 10 → 16
+        system_emb = self.system_encoder(system_input).relu()        # 15 → 16
         resource_input = torch.cat([budget_emb, system_emb], dim=-1) # 32
         res_hidden = self.resource_encoder(resource_input)           # 32 → 64
 

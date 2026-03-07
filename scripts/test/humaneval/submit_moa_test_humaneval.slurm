@@ -5,16 +5,16 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=12:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
 # MoA (Mixture of Agents) — Test Sweep for HumanEval
-#   Arrival rates: 10, 30, 50, 100, 150, 200 req/min
+#   Arrival rates: 10, 30, 50, 100, 200 req/min (matching MBPP)
 #   HumanEval test split is small (~131 items), so shorter time limit.
-#   Output CSV: logs/test/humaneval/moa_humaneval_test.csv
+#   Output CSV: logs/test/humaneval/moa/moa_humaneval_test.csv
 # =========================================================================
 
 echo "========================================="
@@ -38,7 +38,7 @@ mkdir -p logs/test/humaneval/moa
 
 TEST_LIMIT=131
 CONCURRENCY=1000
-ARRIVAL_RATES=(10 30 50 100 150 200)
+ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 OUTPUT_CSV="logs/test/humaneval/moa/moa_humaneval_test.csv"
 
