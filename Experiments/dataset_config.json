@@ -13,7 +13,7 @@
     "arrival_rates": [100, 30, 50, 10, 150, 200],
     "arrival_pattern": "poisson"
   },
-  "gsm8k": {
+  "gsm_hard": {
     "train_limit": 500,
     "val_limit": 125,
     "test_limit": 500,
@@ -27,9 +27,9 @@
     "arrival_rates": [100, 30, 50, 10, 150, 200],
     "arrival_pattern": "poisson"
   },
-  "mmlu": {
+  "mmlu_pro": {
     "train_limit": 500,
-    "val_limit": 125,
+    "val_limit": 70,
     "test_limit": 500,
     "arrival_rates": [100, 30, 50, 10, 150, 200],
     "arrival_pattern": "poisson"

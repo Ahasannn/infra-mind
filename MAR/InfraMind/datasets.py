@@ -11,8 +11,10 @@ from MAR.Tools.reader.readers import JSONLReader
 
 from Datasets.mbpp_dataset import MbppDataset
 from Datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
+from Datasets.gsm_hard_dataset import gsm_hard_data_process, gsm_get_predict as gsm_hard_get_predict
 from Datasets.math_dataset import MATH_get_predict, MATH_is_correct, load_math_dataset
 from Datasets.mmlu_dataset import MMLUDataset
+from Datasets.mmlu_pro_dataset import MmluProDataset
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,47 @@ def _safe_float(value: str) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _postprocess_mmlu_pro_answer(answer: Union[str, List[str]]) -> str:
+    """Extract letter answer (A-J) from model response for MMLU-Pro."""
+    import re
+    import string as _string
+    valid_letters = set(_string.ascii_uppercase[:10])  # A-J
+
+    if isinstance(answer, list):
+        answer = answer[0] if answer else ""
+    if not isinstance(answer, str):
+        raise ValueError("Expected answer as string.")
+    if not answer:
+        return ""
+
+    # Look for "answer is X" pattern
+    ans_pos = answer.find("answer is")
+    if ans_pos != -1:
+        after = answer[ans_pos + len("answer is"):].strip(":").strip()
+        if after and after[0].upper() in valid_letters:
+            return after[0].upper()
+
+    # Look for "Option X" or "(X)" patterns
+    option_match = re.search(r'(?:Option|option)\s+([A-J])', answer)
+    if option_match:
+        return option_match.group(1).upper()
+    paren_match = re.search(r'\(([A-J])\)', answer)
+    if paren_match:
+        return paren_match.group(1).upper()
+
+    # Try first character — only if response is very short (e.g. "A", "B.")
+    stripped = answer.strip().rstrip(".),:;")
+    if len(stripped) <= 2 and stripped and stripped[0].upper() in valid_letters:
+        return stripped[0].upper()
+
+    # Scan for standalone letter A-J — take the last match
+    matches = re.findall(r'(?<![a-zA-Z])([A-J])(?![a-zA-Z])', answer)
+    if matches:
+        return matches[-1]
+
+    return ""
 
 
 def _postprocess_mmlu_answer(answer: Union[str, List[str]]) -> str:
@@ -268,6 +311,58 @@ class Gsm8kAdapter(InfraMindDataset):
         return float(1.0 if is_solved else 0.0), {"is_solved": bool(is_solved), "pred": pred, "gold": answer}
 
 
+class GsmHardAdapter(InfraMindDataset):
+    dataset_name = "gsm_hard"
+    role_domain = "Math"
+    prompt_file = os.path.join("MAR", "Roles", "FinalNode", "gsm8k.json")
+
+    def _load_samples(self) -> List[InfraMindSample]:
+        from datasets import load_dataset as hf_load_dataset
+
+        raw = hf_load_dataset("reasoning-machines/gsm-hard", split="train")
+        processed = gsm_hard_data_process(raw)
+
+        # Fixed splits from 1319 shuffled items (seed=1234 to match baselines):
+        #   train: [0:500], val: [500:625], test: [625:1125]
+        indices = list(range(len(processed)))
+        rng = random.Random(1234)
+        rng.shuffle(indices)
+
+        if self.split == "train":
+            active_indices = indices[:500]
+        elif self.split in ("val", "dev"):
+            active_indices = indices[500:625]
+        elif self.split == "test":
+            active_indices = indices[625:1125]
+        else:
+            active_indices = indices
+
+        samples: List[InfraMindSample] = []
+        for idx in active_indices:
+            row = processed[idx]
+            query = str(row.get("task", ""))
+            answer = str(row.get("answer", "")).strip()
+            item_id = _resolve_item_id(row, idx)
+            samples.append(InfraMindSample(query=query, tests=None, answer=answer, item_id=item_id))
+        return samples
+
+    def score_response(
+        self,
+        response: str,
+        tests: Optional[List[str]],
+        sample: Optional[InfraMindSample],
+    ) -> Tuple[float, Dict[str, object]]:
+        answer = sample.answer if sample else ""
+        pred = gsm_hard_get_predict(response)
+        pred_value = _safe_float(str(pred))
+        gold_value = _safe_float(str(answer))
+        if pred_value is not None and gold_value is not None:
+            is_solved = pred_value == gold_value
+        else:
+            is_solved = str(pred).strip() == str(answer).strip()
+        return float(1.0 if is_solved else 0.0), {"is_solved": bool(is_solved), "pred": pred, "gold": answer}
+
+
 class MathAdapter(InfraMindDataset):
     dataset_name = "math"
     role_domain = "Math"
@@ -352,6 +447,46 @@ class MmluAdapter(InfraMindDataset):
         return float(1.0 if is_solved else 0.0), {"is_solved": is_solved, "pred": pred, "gold": answer}
 
 
+class MmluProAdapter(InfraMindDataset):
+    dataset_name = "mmlu_pro"
+    role_domain = "Commonsense"
+    prompt_file = os.path.join("MAR", "Roles", "FinalNode", "mmlu.json")
+
+    def __init__(
+        self,
+        split: str,
+        *,
+        seed: int = 42,
+    ) -> None:
+        super().__init__(split, seed=seed)
+
+    def _load_samples(self) -> List[InfraMindSample]:
+        # MmluProDataset handles split mapping internally:
+        #   train → stratified from HF test (first N per category)
+        #   test  → stratified from HF test (next N, non-overlapping)
+        #   val/dev → HF validation (70 items)
+        dataset = MmluProDataset(self.split)
+        samples: List[InfraMindSample] = []
+        for idx in range(len(dataset)):
+            record = dataset[idx]
+            query = dataset.record_to_input(record)["task"]
+            answer = dataset.record_to_target_answer(record)
+            item_id = _resolve_item_id(record, idx)
+            samples.append(InfraMindSample(query=query, tests=None, answer=answer, item_id=item_id))
+        return samples
+
+    def score_response(
+        self,
+        response: str,
+        tests: Optional[List[str]],
+        sample: Optional[InfraMindSample],
+    ) -> Tuple[float, Dict[str, object]]:
+        answer = sample.answer if sample else ""
+        pred = _postprocess_mmlu_pro_answer(response)
+        is_solved = str(pred).strip().upper() == str(answer).strip().upper()
+        return float(1.0 if is_solved else 0.0), {"is_solved": is_solved, "pred": pred, "gold": answer}
+
+
 def get_dataset_adapter(
     dataset_name: str,
     *,
@@ -382,6 +517,11 @@ def get_dataset_adapter(
             split_ratio=split_ratio,
             seed=seed,
         )
+    if name == "gsm_hard":
+        return GsmHardAdapter(
+            split,
+            seed=seed,
+        )
     if name == "math":
         return MathAdapter(
             split,
@@ -394,8 +534,13 @@ def get_dataset_adapter(
             dataset_root=dataset_root or dataset_path,
             seed=seed,
         )
+    if name == "mmlu_pro":
+        return MmluProAdapter(
+            split,
+            seed=seed,
+        )
     raise ValueError(f"Unsupported dataset: {dataset_name}")
 
 
 def available_datasets() -> Sequence[str]:
-    return ("mbpp", "humaneval", "gsm8k", "math", "mmlu")
+    return ("mbpp", "humaneval", "gsm8k", "gsm_hard", "math", "mmlu", "mmlu_pro")

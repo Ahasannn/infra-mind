@@ -1,21 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=mas_train_heval
-#SBATCH --output=logs/baseline_train/humaneval/slurm-%j.out
-#SBATCH --error=logs/baseline_train/humaneval/slurm-%j.err
+#SBATCH --job-name=mas_math_lc
+#SBATCH --output=logs/baseline_train/math/slurm-%j.out
+#SBATCH --error=logs/baseline_train/math/slurm-%j.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mem=64G
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=16
 #SBATCH --ntasks=1
 
 # =========================================================================
-# Baseline MAS Router training for HumanEval dataset
-#   Small dataset: 164 total (33 train / 131 test with split-ratio 0.2)
+# Baseline MAS Router training for MATH dataset (low cost rates)
 #   Trains sequentially with cost_rates: 5, 10, 15
-#   10 epochs each (more epochs for tiny dataset)
-#   Batch size 16 (smaller for small dataset)
+#   5 epochs each, auto-resumes from existing checkpoint if found
 # =========================================================================
 
 echo "========================================="
@@ -40,19 +38,24 @@ echo ""
 
 # Read train_limit from dataset config
 CONFIG_FILE="${REPO_ROOT}/Experiments/dataset_config.json"
-TRAIN_LIMIT=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}'))['humaneval']['train_limit'])")
+TRAIN_LIMIT=$(python3 -c "import json; print(json.load(open('${CONFIG_FILE}'))['math']['train_limit'])")
 echo "Train Limit (from config): ${TRAIN_LIMIT}"
 echo ""
 
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
-export CODE_EXECUTION_TIMEOUT="10"
 
 CHECKPOINT_DIR="${BLUE_STORAGE}/checkpoints/mas_router"
 mkdir -p "${CHECKPOINT_DIR}"
 
-LOG_DIR="logs/baseline_train/humaneval"
+LOG_DIR="logs/baseline_train/math"
 mkdir -p "${LOG_DIR}"
+
+MATH_DATASET_ROOT="${MATH_DATASET_ROOT:-${BLUE_STORAGE}/datasets/MATH}"
+if [[ ! -d "${MATH_DATASET_ROOT}/train" || ! -d "${MATH_DATASET_ROOT}/test" ]]; then
+    echo "ERROR: MATH dataset not found at ${MATH_DATASET_ROOT}"
+    exit 1
+fi
 
 # --- vLLM cleanup ---
 cleanup_vllm() {
@@ -76,6 +79,7 @@ cleanup_vllm() {
     else
         echo "No PID files found in ${vllm_log_dir}"
     fi
+    pkill -u $USER -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
     echo "Cleanup complete"
 }
 trap cleanup_vllm EXIT INT TERM
@@ -90,20 +94,15 @@ echo "vLLM servers ready!"
 bash scripts/check_vllm_status.sh
 echo ""
 
-# --- Training parameters (adjusted for small dataset) ---
-EPOCHS=10
-BATCH_SIZE=16
+# --- Training parameters ---
+EPOCHS=5
+BATCH_SIZE=32
 LR=0.01
-SPLIT_RATIO=0.2
 COST_RATES=(5 10 15)
 
-# Drain vLLM between cost rates (match MBPP pattern)
-export VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-16}"
-
 echo "========================================="
-echo "Baseline MAS Training — HumanEval"
+echo "Baseline MAS Training — MATH (Low Cost Rates)"
 echo "Training ${TRAIN_LIMIT} samples, ${EPOCHS} epochs each"
-echo "Split ratio: ${SPLIT_RATIO} (20% train / 80% test)"
 echo "Cost rates: ${COST_RATES[*]}"
 echo "========================================="
 echo ""
@@ -117,16 +116,16 @@ for COST_RATE in "${COST_RATES[@]}"; do
     echo "========================================="
 
     COST_TAG="cost${COST_RATE}"
-    CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_humaneval_train_${TRAIN_LIMIT}_${COST_TAG}.pth"
-    TELEMETRY_CSV="${LOG_DIR}/mas_train_humaneval_${TRAIN_LIMIT}_${COST_TAG}.csv"
+    CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_math_train_${TRAIN_LIMIT}_${COST_TAG}.pth"
+    TELEMETRY_CSV="${LOG_DIR}/mas_train_math_${TRAIN_LIMIT}_${COST_TAG}.csv"
 
-    CMD="python Experiments/run_humaneval.py \
+    CMD="python Experiments/run_math.py \
       --train_limit ${TRAIN_LIMIT} \
       --epochs ${EPOCHS} \
       --batch_size ${BATCH_SIZE} \
       --lr ${LR} \
       --cost_rate ${COST_RATE} \
-      --split-ratio ${SPLIT_RATIO} \
+      --dataset-root ${MATH_DATASET_ROOT} \
       --train-telemetry-csv ${TELEMETRY_CSV} \
       --skip-test \
       --save-checkpoint ${CHECKPOINT_PATH}"
@@ -168,7 +167,7 @@ if [ ${FINAL_EXIT} -eq 0 ]; then
     echo ""
     echo "Created checkpoints:"
     for COST_RATE in "${COST_RATES[@]}"; do
-        echo "  - ${CHECKPOINT_DIR}/mas_humaneval_train_${TRAIN_LIMIT}_cost${COST_RATE}.pth"
+        echo "  - ${CHECKPOINT_DIR}/mas_math_train_${TRAIN_LIMIT}_cost${COST_RATE}.pth"
     done
 fi
 

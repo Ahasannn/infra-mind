@@ -73,7 +73,6 @@ cleanup_vllm() {
     else
         echo "No PID files found in ${vllm_log_dir}"
     fi
-    pkill -u $USER -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
     echo "Cleanup complete"
 }
 trap cleanup_vllm EXIT INT TERM

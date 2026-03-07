@@ -1,11 +1,10 @@
-"""MoA (Mixture of Agents) baseline — HumanEval dataset."""
+"""MoA (Mixture of Agents) baseline — MMLU-Pro dataset."""
 
 import sys
 import os
 import io
 import time
 import argparse
-import re
 import json
 import threading
 from collections import Counter
@@ -17,7 +16,6 @@ from loguru import logger
 
 from MAR.LLM.llm_profile_full import llm_profile, model_base_urls
 from MAR.MoA.moa_runner import MoARunner
-from MAR.Tools.coding.python_executor import PyExecutor
 from MAR.Utils.utils import fix_random_seed
 from MAR.Utils.log import configure_logging, ProgressTracker
 from MAR.Utils.telemetry import CsvTelemetryWriter
@@ -25,7 +23,7 @@ from MAR.Utils.request_patterns import RequestPattern
 from MAR.Utils.request_shooter import RequestShooter
 from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 
-from Datasets.humaneval_dataset import HumanEvalDataset
+from Datasets.mmlu_pro_dataset import MmluProDataset
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -60,8 +58,36 @@ def _metrics_snapshot() -> str:
         return "{}"
 
 
+def _postprocess_answer(text):
+    """Extract letter answer (A-J) from model response."""
+    import re
+    import string
+    valid_letters = set(string.ascii_uppercase[:10])
+
+    if not text:
+        return ""
+    ans_pos = text.find("answer is")
+    if ans_pos != -1:
+        after = text[ans_pos + len("answer is"):].strip(":").strip()
+        if after and after[0].upper() in valid_letters:
+            return after[0].upper()
+    option_match = re.search(r'(?:Option|option)\s+([A-J])', text)
+    if option_match:
+        return option_match.group(1).upper()
+    paren_match = re.search(r'\(([A-J])\)', text)
+    if paren_match:
+        return paren_match.group(1).upper()
+    stripped = text.strip().rstrip(".),:;")
+    if len(stripped) <= 2 and stripped and stripped[0].upper() in valid_letters:
+        return stripped[0].upper()
+    matches = re.findall(r'(?<![a-zA-Z])([A-J])(?![a-zA-Z])', text)
+    if matches:
+        return matches[-1]
+    return ""
+
+
 def parse_args():
-    p = argparse.ArgumentParser(description="MoA baseline — HumanEval")
+    p = argparse.ArgumentParser(description="MoA baseline — MMLU-Pro")
     p.add_argument("--test_limit", type=int, default=0)
     p.add_argument("--aggregator-model", type=str,
                     default="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B")
@@ -82,15 +108,28 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     fix_random_seed(1234)
-    domain = "humaneval"
+    domain = "mmlu_pro"
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     configure_logging(log_name=f"moa_{domain}_{current_time}.txt")
     run_id = current_time
 
     test_limit = args.test_limit if args.test_limit > 0 else 0
-    test_dataset = HumanEvalDataset("test", limit=test_limit)
-    logger.info("MoA HumanEval: {} test items", len(test_dataset))
+    dataset_test = MmluProDataset(
+        "test",
+        stratified_limit=test_limit,
+    )
+
+    # Convert to list of dicts for RequestShooter
+    test_items = []
+    for i in range(len(dataset_test)):
+        record = dataset_test[i]
+        test_items.append({
+            "item_id": i,
+            "task": dataset_test.record_to_input(record)["task"],
+            "answer": dataset_test.record_to_target_answer(record),
+        })
+    logger.info("MoA MMLU-Pro: {} test items", len(test_items))
 
     model_names = [m["Name"] for m in llm_profile]
     runner = MoARunner(
@@ -112,8 +151,6 @@ if __name__ == "__main__":
     writer = CsvTelemetryWriter(telemetry_csv, fieldnames=MOA_TEST_FIELDS)
     logger.info("Telemetry CSV: {}", telemetry_csv)
 
-    code_pattern = re.compile(r"```python.*?```", re.DOTALL | re.MULTILINE)
-
     arrival_rates = args.arrival_rate if isinstance(args.arrival_rate, list) else [args.arrival_rate]
 
     for arrival_rate in arrival_rates:
@@ -122,7 +159,7 @@ if __name__ == "__main__":
         _ctr_lock = threading.Lock()
 
         progress = ProgressTracker(
-            total=len(test_dataset),
+            total=len(test_items),
             phase=f"MoA Test (rate={arrival_rate})",
             log_interval=10,
         )
@@ -170,40 +207,34 @@ if __name__ == "__main__":
             on_result=on_result,
         )
 
-        def handler(row):
-            query = row["prompt"]
-            test = row["test"]
-            item_id = str(row.get("task_id", ""))
+        def handler(item):
+            query = item["task"]
+            true_answer = item["answer"]
+            item_id = str(item.get("item_id", ""))
 
             moa = runner.run_single(query=query, item_id=item_id)
 
-            result_text = moa.aggregated_response
-            match = code_pattern.search(result_text)
-            if match:
-                code = match.group(0).lstrip("```python\n").rstrip("\n```")
-                is_solved, feedback, state = PyExecutor().execute(code, [test], timeout=100)
-            else:
-                is_solved = 0
-                feedback = "No python code block found in aggregated response."
+            # Extract letter answer (A-J)
+            predict = _postprocess_answer(moa.aggregated_response)
+            is_solved = str(predict).strip().upper() == str(true_answer).strip().upper()
 
             return {
                 "item_id": item_id,
-                "is_solved": bool(is_solved),
-                "feedback": feedback,
+                "is_solved": is_solved,
+                "feedback": f"pred={predict} gold={true_answer}",
                 "moa": moa,
             }
 
-        items = test_dataset.df.to_dict("records")
         shooter.run(
-            items, handler=handler,
-            item_id_fn=lambda row, idx: str(row.get("task_id", idx)),
+            test_items, handler=handler,
+            item_id_fn=lambda item, idx: str(item.get("item_id", idx)),
         )
 
         progress.log_final_summary()
         total_solved = counters["solved"]
         total_executed = counters["executed"]
         accuracy = total_solved / total_executed if total_executed else 0.0
-        logger.info("MoA HumanEval rate={}: {}/{} ({:.1%})",
+        logger.info("MoA MMLU-Pro rate={}: {}/{} ({:.1%})",
                      arrival_rate, total_solved, total_executed, accuracy)
 
-    logger.info("MoA HumanEval complete.")
+    logger.info("MoA MMLU-Pro complete.")

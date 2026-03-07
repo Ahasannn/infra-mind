@@ -35,11 +35,11 @@ uv sync --frozen --extra serve
 Train the infrastructure-aware router with CMDP-based orchestration:
 
 ```bash
-python Experiments/train_system_router_mbpp.py              # MBPP dataset
-python Experiments/train_system_router_gsm8k.py --dataset-path Datasets/gsm8k/gsm8k.jsonl
-python Experiments/train_system_router_humaneval.py --dataset-path Datasets/humaneval/humaneval-py.jsonl
-python Experiments/train_system_router_math.py --dataset-root Datasets/MATH
-python Experiments/train_system_router_mmlu.py --dataset-root Datasets/MMLU/data
+python Experiments/train_inframind_mbpp.py                  # MBPP dataset
+python Experiments/train_inframind_gsm_hard.py              # GSM-Hard dataset (HF auto-download)
+python Experiments/train_inframind_humaneval.py --dataset-path Datasets/humaneval/humaneval-py.jsonl
+python Experiments/train_inframind_math.py --dataset-root Datasets/MATH
+python Experiments/train_inframind_mmlu_pro.py              # MMLU-Pro dataset (HF auto-download)
 ```
 
 Key flags for `train_system_router_*.py`:
@@ -56,28 +56,28 @@ Train the original MAS Router without infrastructure awareness:
 
 ```bash
 python Experiments/run_mbpp.py              # MBPP dataset
-python Experiments/run_gsm8k.py             # GSM8K dataset
+python Experiments/run_gsm_hard.py          # GSM-Hard dataset
 python Experiments/run_humaneval.py         # HumanEval dataset
 python Experiments/run_math.py              # MATH dataset
-python Experiments/run_mmlu.py              # MMLU dataset
+python Experiments/run_mmlu_pro.py          # MMLU-Pro dataset
 ```
 
 **SLURM Training Jobs** (recommended for full training on HPC):
 ```bash
 sbatch scripts/baseline_train/mbpp/train_mas_mbpp.slurm
-sbatch scripts/baseline_train/gsm8k/train_mas_gsm8k.slurm
+sbatch scripts/baseline_train/gsm_hard/train_mas_gsm_hard.slurm
 sbatch scripts/baseline_train/humaneval/train_mas_humaneval.slurm
 sbatch scripts/baseline_train/math/train_mas_math.slurm
-sbatch scripts/baseline_train/mmlu/train_mas_mmlu.slurm
+sbatch scripts/baseline_train/mmlu_pro/train_mas_mmlu_pro.slurm
 ```
 
 **Baseline Test Sweeps** (arrival rate × cost rate):
 ```bash
 sbatch scripts/test/mbpp/submit_baseline_test_mbpp.slurm
-sbatch scripts/test/gsm8k/submit_baseline_test_gsm8k.slurm
+sbatch scripts/test/gsm_hard/submit_baseline_test_gsm_hard.slurm
 sbatch scripts/test/humaneval/submit_baseline_test_humaneval.slurm
 sbatch scripts/test/math/submit_baseline_test_math.slurm
-sbatch scripts/test/mmlu/submit_baseline_test_mmlu.slurm
+sbatch scripts/test/mmlu_pro/submit_baseline_test_mmlu_pro.slurm
 ```
 
 ## Local vLLM Model Pool
@@ -178,8 +178,10 @@ Prompt templates for:
 
 ### Experiment Scripts (`Experiments/`)
 
-- `train_system_router_*.py`: **INFRAMIND** training for each dataset
+- `train_inframind_*.py`: **INFRAMIND** PPO-Lagrangian training for each dataset
 - `run_*.py`: Baseline MAS Router training/testing for comparison
+- `train_gptswarm_*.py` / `run_gptswarm_*.py`: GPTSwarm baseline training/testing
+- `run_moa_*.py`: MoA baseline testing (zero-training ensemble)
 
 ### Dataset Loaders (`Datasets/`)
 
@@ -187,11 +189,13 @@ Each dataset has a `*_dataset.py` loader with stratified/deterministic sampling:
 
 ```
 Datasets/
-├── gsm8k_dataset.py       # GSM8K: math word problems
+├── gsm_hard_dataset.py    # GSM-Hard: math word problems (harder, larger numbers)
 ├── humaneval_dataset.py   # HumanEval: code generation
 ├── mbpp_dataset.py        # MBPP: code generation
+├── mmlu_pro_dataset.py    # MMLU-Pro: multi-task understanding (10 options A-J)
 ├── MATH/                  # MATH: competition math problems
-└── MMLU/                  # MMLU: multi-task language understanding
+├── gsm8k_dataset.py       # GSM8K: (legacy, replaced by GSM-Hard)
+└── mmlu_dataset.py        # MMLU: (legacy, replaced by MMLU-Pro)
 ```
 
 Datasets auto-download from HuggingFace or can be placed in subdirectories.
