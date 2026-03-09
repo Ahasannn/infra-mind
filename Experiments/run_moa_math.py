@@ -87,8 +87,12 @@ if __name__ == "__main__":
     configure_logging(log_name=f"moa_{domain}_{current_time}.txt")
     run_id = current_time
 
-    test_limit = args.test_limit if args.test_limit > 0 else 0
-    test_data = load_math_dataset(args.dataset_root, "test", stratified_limit=test_limit)
+    test_data = load_math_dataset(args.dataset_root, "test")
+    if args.test_limit and args.test_limit > 0:
+        import random as _random
+        indices = list(range(len(test_data)))
+        _random.Random(42).shuffle(indices)
+        test_data = [test_data[i] for i in indices[:args.test_limit]]
     logger.info("MoA MATH: {} test items", len(test_data))
 
     model_names = [m["Name"] for m in llm_profile]

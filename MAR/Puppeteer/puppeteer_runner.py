@@ -44,10 +44,10 @@ class PuppeteerRunner:
         encoder=None,
     ):
         self.model_names = model_names
-        num_models = len(model_names)
+        num_roles = len(DEFAULT_AGENT_ROLES)
 
         self.policy = PuppeteerPolicy(
-            num_models=num_models,
+            num_roles=num_roles,
             model_names=model_names,
             domain=domain,
             max_steps=max_steps,
@@ -64,7 +64,11 @@ class PuppeteerRunner:
                 checkpoint_path, state.get("iteration", "?"),
             )
 
-        # Sentence encoder for query embeddings
+        # Move policy network to GPU (SentenceEncoder returns CUDA tensors)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.policy.to(device)
+
+        # Sentence encoder for context embeddings (re-encoding at each step)
         if encoder is not None:
             self.encoder = encoder
         else:
@@ -87,6 +91,7 @@ class PuppeteerRunner:
                 query=query,
                 item_id=item_id,
                 query_embedding=query_emb,
+                encoder=self.encoder,
                 deterministic=True,
             )
         return result

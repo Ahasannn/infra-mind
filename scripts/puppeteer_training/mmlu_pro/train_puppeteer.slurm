@@ -5,15 +5,16 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=14:00:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
 
 # =========================================================================
-# Puppeteer (NeurIPS 2025) — REINFORCE sequential agent chaining for MMLU-Pro
-#   Learns which model to activate next via MLP policy.
-#   ~100 iterations with batch_size=4 per iteration.
+# Puppeteer (NeurIPS 2025) — REINFORCE sequential role orchestration for MMLU-Pro
+#   Learns which ROLE to activate next via MLP policy (decoupled from model).
+#   Model assigned randomly per request. Dynamic state re-encoding each step.
+#   ~100 iterations with batch_size=4 per iteration (~2.5h).
 # =========================================================================
 
 echo "========================================="
@@ -55,6 +56,7 @@ TELEMETRY_CSV="${LOG_DIR}/puppeteer_${SLURM_JOB_ID}.csv"
 
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
+export PYTHONUNBUFFERED=1
 
 # --- vLLM cleanup ---
 cleanup_vllm() {

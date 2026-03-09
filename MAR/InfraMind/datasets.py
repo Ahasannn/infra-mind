@@ -205,24 +205,12 @@ class HumanEvalAdapter(InfraMindDataset):
         super().__init__(split, seed=seed)
 
     def _load_samples(self) -> List[InfraMindSample]:
-        reader = JSONLReader()
-        records = reader.parse_file(self.dataset_path)
-        indices = list(range(len(records)))
-        rng = random.Random(self.seed)
-        rng.shuffle(indices)
-        split_index = int(len(indices) * self.split_ratio)
-        train_indices = indices[:split_index]
-        test_indices = indices[split_index:]
-        if self.split == "train":
-            active = train_indices
-        elif self.split == "test":
-            active = test_indices
-        else:
-            active = indices
-
+        # Use HumanEvalDataset (pandas-based) for identical splits across all methods
+        from Datasets.humaneval_dataset import HumanEvalDataset
+        dataset = HumanEvalDataset(self.split, split_ratio=self.split_ratio, seed=self.seed)
         samples: List[InfraMindSample] = []
-        for idx in active:
-            row = records[idx]
+        for idx in range(len(dataset)):
+            row = dataset[idx]
             query = str(row.get("prompt", ""))
             test = row.get("test", "")
             item_id = _resolve_item_id(row, idx)

@@ -41,7 +41,7 @@ CONCURRENCY=1000
 ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 
-CHECKPOINT="${BLUE_STORAGE}/checkpoints/gptswarm/gptswarm_mmlu_pro_best.pt"
+CHECKPOINT="${BLUE_STORAGE}/checkpoints/gptswarm/gptswarm_mmlu_pro_last.pt"
 OUTPUT_CSV="logs/test/mmlu_pro/gptswarm/gptswarm_mmlu_pro_test.csv"
 
 if [ ! -f "${CHECKPOINT}" ]; then

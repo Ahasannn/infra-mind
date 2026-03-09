@@ -5,7 +5,7 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=06:00:00
+#SBATCH --time=08:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
@@ -41,7 +41,7 @@ CONCURRENCY=1000
 ARRIVAL_RATES=(10 30 50 100 200)
 ARRIVAL_PATTERN="poisson"
 
-CHECKPOINT="${BLUE_STORAGE}/checkpoints/gptswarm/gptswarm_gsm_hard_best.pt"
+CHECKPOINT="${BLUE_STORAGE}/checkpoints/gptswarm/gptswarm_gsm_hard_last.pt"
 OUTPUT_CSV="logs/test/gsm_hard/gptswarm/gptswarm_gsm_hard_test.csv"
 
 if [ ! -f "${CHECKPOINT}" ]; then

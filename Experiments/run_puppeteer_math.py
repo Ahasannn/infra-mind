@@ -31,6 +31,7 @@ PUPPETEER_TEST_FIELDS = (
     "quality_is_correct", "quality_feedback",
     "total_latency_seconds", "num_steps",
     "num_steps_succeeded", "num_steps_failed",
+    "assigned_model", "step_roles_json",
     "step_models_json", "step_latencies_json",
     "arrival_rate", "arrival_pattern",
     "metrics_snapshot_json",
@@ -84,8 +85,12 @@ if __name__ == "__main__":
     configure_logging(log_name=f"puppeteer_{domain}_{current_time}.txt")
     run_id = current_time
 
-    test_limit = args.test_limit if args.test_limit > 0 else 0
-    test_data = load_math_dataset(args.dataset_root, "test", stratified_limit=test_limit)
+    test_data = load_math_dataset(args.dataset_root, "test")
+    if args.test_limit and args.test_limit > 0:
+        import random as _random
+        indices = list(range(len(test_data)))
+        _random.Random(42).shuffle(indices)
+        test_data = [test_data[i] for i in indices[:args.test_limit]]
     logger.info("Puppeteer MATH: {} test items", len(test_data))
 
     model_names = [m["Name"] for m in llm_profile]
@@ -148,6 +153,8 @@ if __name__ == "__main__":
                 "num_steps": pup.num_steps,
                 "num_steps_succeeded": pup.num_steps_succeeded,
                 "num_steps_failed": pup.num_steps_failed,
+                "assigned_model": pup.assigned_model,
+                "step_roles_json": json.dumps(pup.step_roles),
                 "step_models_json": json.dumps(pup.step_models),
                 "step_latencies_json": json.dumps(pup.step_latencies),
                 "arrival_rate": arrival_rate,

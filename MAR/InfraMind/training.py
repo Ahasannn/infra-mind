@@ -530,6 +530,7 @@ def _run_validation(
 def main(default_dataset: str = "mbpp") -> None:
     parser = _build_arg_parser(default_dataset)
     args = parser.parse_args()
+    logger.info("[InfraMind] Starting main() for dataset={}", default_dataset)
 
     # Random exploration forces skip_training
     if getattr(args, "random_exploration", False):
@@ -545,6 +546,7 @@ def main(default_dataset: str = "mbpp") -> None:
     test_path = args.test_path.strip() or None
     dataset_root = args.dataset_root.strip() or None
 
+    logger.info("[InfraMind] Loading dataset adapter...")
     adapter = get_dataset_adapter(
         args.dataset,
         split=args.split,
@@ -568,6 +570,7 @@ def main(default_dataset: str = "mbpp") -> None:
     length_predictor_path = args.length_predictor.strip() or None
     quality_predictor_path = getattr(args, "quality_predictor", "") or ""
     quality_predictor_path = quality_predictor_path.strip() or None
+    logger.info("[InfraMind] Creating router (role_domain={})...", role_domain)
     router = InfraMindRouter(
         role_domain=role_domain,
         latency_predictor_path=latency_predictor_path,
@@ -587,6 +590,7 @@ def main(default_dataset: str = "mbpp") -> None:
         router.collab_determiner.temp = planner_temp
         logger.info("Planner collab temperature set to {:.2f}", planner_temp)
 
+    logger.info("[InfraMind] Creating environment...")
     env = InfraMindEnv(
         router=router,
         prompt_file=prompt_file,

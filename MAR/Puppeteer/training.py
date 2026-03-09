@@ -30,7 +30,7 @@ from loguru import logger
 
 from MAR.LLM.llm_profile_full import llm_profile, model_base_urls
 from MAR.LLM.llm_embedding import SentenceEncoder
-from MAR.Puppeteer.puppeteer_policy import PuppeteerPolicy, PuppeteerResult
+from MAR.Puppeteer.puppeteer_policy import PuppeteerPolicy, PuppeteerResult, DEFAULT_AGENT_ROLES
 from MAR.Puppeteer.puppeteer_trainer import PuppeteerTrainer
 from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 from MAR.Utils.utils import fix_random_seed
@@ -51,6 +51,8 @@ TRAIN_TELEMETRY_FIELDS = (
     "num_steps",
     "num_steps_succeeded",
     "num_steps_failed",
+    "assigned_model",
+    "step_roles_json",
     "step_models_json",
     "step_latencies_json",
     "reinforce_loss",
@@ -163,7 +165,7 @@ def main(
 
     # Create policy + trainer
     policy = PuppeteerPolicy(
-        num_models=len(model_names),
+        num_roles=len(DEFAULT_AGENT_ROLES),
         model_names=model_names,
         domain=default_dataset,
         max_steps=args.max_steps,
@@ -171,6 +173,11 @@ def main(
         temperature=args.temperature,
         request_timeout=args.request_timeout,
     )
+    # Move policy network to GPU (SentenceEncoder returns CUDA tensors)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    policy.to(device)
+    logger.info("[Puppeteer] Policy moved to {}", device)
+
     trainer = PuppeteerTrainer(
         policy=policy,
         lr=args.lr,
@@ -232,6 +239,7 @@ def main(
                 query=query,
                 item_id=item_id,
                 query_embedding=query_emb,
+                encoder=encoder,
                 deterministic=False,
             )
 
@@ -254,6 +262,8 @@ def main(
                 "num_steps": result.num_steps,
                 "num_steps_succeeded": result.num_steps_succeeded,
                 "num_steps_failed": result.num_steps_failed,
+                "assigned_model": result.assigned_model,
+                "step_roles_json": json.dumps(result.step_roles),
                 "step_models_json": json.dumps(result.step_models),
                 "step_latencies_json": json.dumps(result.step_latencies),
                 "reinforce_loss": 0.0,
@@ -287,6 +297,7 @@ def main(
                         query=query,
                         item_id=item_id,
                         query_embedding=query_emb,
+                        encoder=encoder,
                         deterministic=True,
                     )
                 is_correct, feedback = evaluate_fn(result.final_response, item)
@@ -314,6 +325,8 @@ def main(
                         "num_steps": result.num_steps,
                         "num_steps_succeeded": result.num_steps_succeeded,
                         "num_steps_failed": result.num_steps_failed,
+                        "assigned_model": result.assigned_model,
+                        "step_roles_json": json.dumps(result.step_roles),
                         "step_models_json": json.dumps(result.step_models),
                         "step_latencies_json": json.dumps(result.step_latencies),
                         "reinforce_loss": loss,

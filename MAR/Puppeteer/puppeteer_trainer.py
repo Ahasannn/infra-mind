@@ -111,7 +111,7 @@ class PuppeteerTrainer:
             "best_val_accuracy": self.best_val_accuracy,
             "cost_penalty": self.cost_penalty,
             "domain": self.policy.domain,
-            "num_models": self.policy.num_models,
+            "num_roles": self.policy.num_roles,
             "max_steps": self.policy.max_steps,
             "model_names": self.policy.model_names,
             "agent_roles": self.policy.agent_roles,

@@ -77,6 +77,7 @@ TELEMETRY_CSV="${LOG_DIR}/ppo_lag_${SLURM_JOB_ID}.csv"
 
 export KEY="EMPTY"
 export TOKENIZERS_PARALLELISM="false"
+export PYTHONUNBUFFERED=1
 
 # Verify MAS checkpoint for planner initialization
 if [ ! -f "${MAS_CHECKPOINT}" ]; then

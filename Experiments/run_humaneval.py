@@ -210,8 +210,8 @@ if __name__ == '__main__':
     train_limit = args.train_limit if args.train_limit and args.train_limit > 0 else 0
     test_limit = args.test_limit if args.test_limit and args.test_limit > 0 else 0
 
-    train_dataset = HumanEvalDataset('train', split_ratio=args.split_ratio, seed=1234, limit=train_limit)
-    test_dataset = HumanEvalDataset('test', split_ratio=args.split_ratio, seed=1234, limit=test_limit)
+    train_dataset = HumanEvalDataset('train', split_ratio=args.split_ratio, seed=42, limit=train_limit)
+    test_dataset = HumanEvalDataset('test', split_ratio=args.split_ratio, seed=42, limit=test_limit)
 
     current_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     log_file = f"humaneval_{current_time}.txt"

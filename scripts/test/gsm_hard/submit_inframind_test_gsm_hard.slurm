@@ -5,7 +5,7 @@
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-b200
 #SBATCH --gres=gpu:b200:2
-#SBATCH --time=16:00:00
+#SBATCH --time=32:00:00
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=12
 #SBATCH --ntasks=1
@@ -59,8 +59,7 @@ BUDGET_SWEEP="30,50,100,200,300"
 ARRIVAL_PATTERN="poisson"
 
 # ===== Paths =====
-# TODO: Update checkpoint path after InfraMind training completes
-CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_gsm_hard_best.pt"
+CHECKPOINT="${BLUE_STORAGE}/checkpoints/inframind_ppo_lag/inframind_gsm_hard_20260308_050107_job26656203.pt"
 MAS_CHECKPOINT="${BLUE_STORAGE}/checkpoints/mas_router/mas_gsm_hard_train_500_cost5.pth"
 
 # ===== Output =====
