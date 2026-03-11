@@ -242,7 +242,7 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
         help="Arrival pattern (poisson/microburst/sustained).",
     )
     parser.add_argument("--arrival-patterns", type=str, default="", help="Comma-separated arrival patterns to sweep.")
-    parser.add_argument("--concurrency", type=int, default=1, help="Max concurrent in-flight requests.")
+    parser.add_argument("--concurrency", type=int, default=1000, help="Max concurrent in-flight requests.")
     parser.add_argument("--training-batch-size", type=int, default=64, help="Number of episodes to accumulate before each training update.")
     parser.add_argument("--burst-duration", type=float, default=3.0, help="Burst duration for microburst.")
     parser.add_argument("--spike-intensity", type=float, default=10.0, help="Spike intensity for microburst.")
@@ -402,6 +402,18 @@ def _build_arg_parser(default_dataset: str) -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Hold λ=0 for this many epochs so policy learns quality first (0=disabled).",
+    )
+    parser.add_argument(
+        "--beta-cost",
+        type=float,
+        default=0.0,
+        help="Fixed dollar cost penalty: reward -= beta * dollar_cost. "
+             "Use for blackbox experiments (e.g. 100).",
+    )
+    parser.add_argument(
+        "--fixed-lambda",
+        action="store_true",
+        help="Use fixed lambda (no dual update). Lambda stays at --lambda-init.",
     )
     return parser
 
@@ -604,6 +616,8 @@ def main(default_dataset: str = "mbpp") -> None:
     task_label = _DOMAIN_TASK_INDEX.get(role_domain, 0)
 
     warmup_epochs = getattr(args, "warmup_epochs", 3)
+    beta_cost = getattr(args, "beta_cost", 0.0)
+    fixed_lambda = getattr(args, "fixed_lambda", False)
     trainer = InfraMindTrainer(
         router,
         ppo_epochs=getattr(args, "ppo_epochs", 3),
@@ -612,9 +626,17 @@ def main(default_dataset: str = "mbpp") -> None:
         lr_lambda=getattr(args, "lr_lambda", 0.001),
         lambda_max=getattr(args, "lambda_max", 1.0),
         warmup_epochs=warmup_epochs,
+        beta_cost=beta_cost,
+        fixed_lambda=fixed_lambda,
     )
-    logger.info("λ warmup: {} epochs (λ=0 → quality-only), then dual update with λ_max={:.1f}, lr_λ={:.4f}",
-                warmup_epochs, getattr(args, "lambda_max", 1.0), getattr(args, "lr_lambda", 0.001))
+    if fixed_lambda:
+        logger.info("Fixed λ={:.2f}, β={:.1f} (no dual update)",
+                     getattr(args, "lambda_init", 0.0), beta_cost)
+    else:
+        logger.info("λ warmup: {} epochs (λ=0 → quality-only), then dual update with λ_max={:.1f}, lr_λ={:.4f}",
+                     warmup_epochs, getattr(args, "lambda_max", 1.0), getattr(args, "lr_lambda", 0.001))
+    if beta_cost > 0:
+        logger.info("Dollar cost penalty β={:.1f}", beta_cost)
 
     checkpoint_path = args.checkpoint_path.strip() or ""
     resume_checkpoint = args.resume_checkpoint

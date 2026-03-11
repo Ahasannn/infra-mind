@@ -7,6 +7,10 @@ import contextlib
 import io
 import multiprocessing as mp
 import os
+import sys
+
+# Allow large integer string conversions in test output
+sys.set_int_max_str_digits(0)
 from typing import List
 
 from MAR.Tools.coding.executor_utils import function_with_timeout

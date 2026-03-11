@@ -154,7 +154,10 @@ class InfraMindAgent(Node):
         start = time.perf_counter()
         first_token_time = None
         parts: List[str] = []
-        extra_body = {"priority": self.priority} if self.priority is not None else None
+        # Only send priority to vLLM (local) servers; API providers reject unknown fields
+        _base = str(client.base_url)
+        _is_local = "localhost" in _base or "127.0.0.1" in _base
+        extra_body = {"priority": self.priority} if (self.priority is not None and _is_local) else None
         def _create_stream(msgs, max_out):
             return client.chat.completions.create(
                 model=self.llm_name,
@@ -182,7 +185,7 @@ class InfraMindAgent(Node):
             else:
                 raise
         for chunk in stream:
-            if not hasattr(chunk, "choices"):
+            if not hasattr(chunk, "choices") or not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
             text = getattr(delta, "content", "")

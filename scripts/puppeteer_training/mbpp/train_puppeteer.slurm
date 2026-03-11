@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:b200:2
 #SBATCH --time=06:00:00
 #SBATCH --mem=64G
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
 
 # =========================================================================
@@ -40,7 +40,6 @@ ITERATIONS="${ITERATIONS:-100}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 LR="${LR:-0.001}"
 MAX_STEPS="${MAX_STEPS:-5}"
-COST_PENALTY="${COST_PENALTY:-0.1}"
 VAL_INTERVAL="${VAL_INTERVAL:-10}"
 TRAIN_LIMIT="${TRAIN_LIMIT:-374}"
 VAL_LIMIT="${VAL_LIMIT:-94}"
@@ -97,7 +96,6 @@ echo "Iterations: ${ITERATIONS}"
 echo "Batch size: ${BATCH_SIZE}"
 echo "LR: ${LR}"
 echo "Max steps: ${MAX_STEPS}"
-echo "Cost penalty: ${COST_PENALTY}"
 echo "Val interval: ${VAL_INTERVAL}"
 echo "Train limit: ${TRAIN_LIMIT}, Val limit: ${VAL_LIMIT}"
 echo "vLLM max_num_seqs: ${VLLM_MAX_NUM_SEQS}"
@@ -108,7 +106,6 @@ CMD="python Experiments/train_puppeteer_mbpp.py \
   --batch-size ${BATCH_SIZE} \
   --lr ${LR} \
   --max-steps ${MAX_STEPS} \
-  --cost-penalty ${COST_PENALTY} \
   --val-interval ${VAL_INTERVAL} \
   --train-limit ${TRAIN_LIMIT} \
   --val-limit ${VAL_LIMIT} \

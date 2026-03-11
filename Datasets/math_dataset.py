@@ -74,7 +74,7 @@ def load_math_dataset(data_path: str, split: Union [Literal['train'], Literal['t
         for category_path in category_paths:
             if os.path.isdir(category_path):
                 category_name = os.path.basename(category_path)
-                json_files = glob.glob(os.path.join(category_path, "*.json"))
+                json_files = sorted(glob.glob(os.path.join(category_path, "*.json")))  # Sort for determinism
                 for json_file in json_files:
                     with open(json_file, "r", encoding="utf-8") as f:
                         data = json.load(f)

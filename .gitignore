@@ -26,3 +26,8 @@ build/
 dist/
 .claude/.nfs00000002339d2c3300000139
 temp_markdowns/
+cache/
+*.db
+function_logs.log
+output.txt
+scripts/temp/

@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:b200:2
 #SBATCH --time=08:00:00
 #SBATCH --mem=64G
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
 
 # =========================================================================

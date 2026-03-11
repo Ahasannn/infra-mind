@@ -3,6 +3,10 @@
 Follows the GPTSwarm delegation pattern: each dataset provides
 load/evaluate/query functions, and this module handles the training loop.
 
+Uses DeepSeek-32B as a reward model during training (faithful to the
+original Puppeteer paper's use of a large LLM reward model).
+The reward model is only used during training, not testing.
+
 Usage:
     from MAR.Puppeteer.training import main
     main(
@@ -32,6 +36,7 @@ from MAR.LLM.llm_profile_full import llm_profile, model_base_urls
 from MAR.LLM.llm_embedding import SentenceEncoder
 from MAR.Puppeteer.puppeteer_policy import PuppeteerPolicy, PuppeteerResult, DEFAULT_AGENT_ROLES
 from MAR.Puppeteer.puppeteer_trainer import PuppeteerTrainer
+from MAR.Puppeteer.reward_model import PuppeteerRewardModel, DEFAULT_REWARD_MODEL
 from MAR.InfraMind.metrics_watcher import start_metrics_watcher, model_metrics
 from MAR.Utils.utils import fix_random_seed
 from MAR.Utils.log import configure_logging
@@ -47,6 +52,7 @@ TRAIN_TELEMETRY_FIELDS = (
     "item_id",
     "quality_is_correct",
     "quality_feedback",
+    "reward_model_score",
     "total_latency_seconds",
     "num_steps",
     "num_steps_succeeded",
@@ -91,14 +97,16 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
                         help="Learning rate for policy network (Adam)")
     parser.add_argument("--baseline-decay", type=float, default=0.9,
                         help="EMA decay for REINFORCE baseline")
-    parser.add_argument("--cost-penalty", type=float, default=0.1,
-                        help="Weight for step-count cost in reward")
     parser.add_argument("--val-interval", type=int, default=10,
                         help="Validate every N iterations")
 
     # Chain params
     parser.add_argument("--max-steps", type=int, default=5,
                         help="Maximum reasoning chain length")
+
+    # Reward model
+    parser.add_argument("--reward-model", type=str, default=DEFAULT_REWARD_MODEL,
+                        help="Model name for the reward model (default: DeepSeek-32B)")
 
     # Dataset limits
     parser.add_argument("--train-limit", type=int, default=0,
@@ -182,12 +190,21 @@ def main(
         policy=policy,
         lr=args.lr,
         baseline_decay=args.baseline_decay,
-        cost_penalty=args.cost_penalty,
     )
 
     # Load checkpoint if resuming
     if args.checkpoint_path and os.path.isfile(args.checkpoint_path):
         trainer.load_checkpoint(args.checkpoint_path)
+
+    # Initialize reward model (DeepSeek-32B by default)
+    reward_model = PuppeteerRewardModel(
+        model_name=args.reward_model,
+        domain=default_dataset,
+    )
+    logger.info(
+        "[Puppeteer] Reward model: {} (domain={})",
+        args.reward_model, default_dataset,
+    )
 
     # Checkpoint directory
     checkpoint_dir = args.checkpoint_dir
@@ -227,6 +244,7 @@ def main(
 
         # Process batch items sequentially (chain execution is already sequential)
         utilities = []
+        reward_scores = []
         all_log_probs = []
         step_counts = []
 
@@ -243,9 +261,15 @@ def main(
                 deterministic=False,
             )
 
+            # Binary utility for metrics tracking
             is_correct, feedback = evaluate_fn(result.final_response, item)
             utility = 1.0 if is_correct else 0.0
             utilities.append(utility)
+
+            # Reward model score for REINFORCE training signal
+            rm_score = reward_model.score(query, result.final_response)
+            reward_scores.append(rm_score)
+
             all_log_probs.append(log_probs)
             step_counts.append(result.num_steps)
 
@@ -258,6 +282,7 @@ def main(
                 "item_id": item_id,
                 "quality_is_correct": is_correct,
                 "quality_feedback": feedback,
+                "reward_model_score": rm_score,
                 "total_latency_seconds": result.total_latency,
                 "num_steps": result.num_steps,
                 "num_steps_succeeded": result.num_steps_succeeded,
@@ -271,13 +296,14 @@ def main(
                 "metrics_snapshot_json": _metrics_snapshot(),
             }])
 
-        # REINFORCE update
-        loss = trainer.train_step(utilities, all_log_probs, step_counts)
+        # REINFORCE update using reward model scores
+        loss = trainer.train_step(reward_scores, all_log_probs)
         train_acc = sum(utilities) / len(utilities) if utilities else 0.0
+        mean_rm = sum(reward_scores) / len(reward_scores) if reward_scores else 0.0
 
         logger.info(
-            "[Iter {}/{}] train_acc={:.1%} loss={:.4f} baseline={:.3f} avg_steps={:.1f}",
-            iteration, args.iterations, train_acc, loss, trainer.baseline,
+            "[Iter {}/{}] train_acc={:.1%} rm_score={:.3f} loss={:.4f} baseline={:.3f} avg_steps={:.1f}",
+            iteration, args.iterations, train_acc, mean_rm, loss, trainer.baseline,
             sum(step_counts) / len(step_counts) if step_counts else 0,
         )
 
@@ -321,6 +347,7 @@ def main(
                         "item_id": item_id,
                         "quality_is_correct": is_correct,
                         "quality_feedback": feedback,
+                        "reward_model_score": 0.0,  # not scored during val
                         "total_latency_seconds": result.total_latency,
                         "num_steps": result.num_steps,
                         "num_steps_succeeded": result.num_steps_succeeded,

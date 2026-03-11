@@ -1,33 +1,30 @@
 """
 InfraMind Trainer — two-level training for hierarchical CMDP router.
 
-PPO-Lagrangian formulation with λ warmup:
-    maximize   E[quality]
-    subject to E[cost] <= 1   (where cost = latency / budget)
+Reward formulation:
+    reward = quality - λ * (latency / budget) - β * dollar_cost
 
-Shared Lagrange multiplier λ adapts the quality-cost tradeoff automatically.
-When the policy violates the budget, λ increases → both levels prioritize cost.
-When the policy is within budget, λ decreases → both levels focus on quality.
+λ controls latency penalty (primary constraint: stay within time budget).
+β controls dollar cost penalty (secondary: prefer cheaper models).
 
-λ warmup: λ is held at 0 for the first `warmup_epochs` epochs so the policy
-first learns quality maximization (which models/strategies solve problems).
-This prevents the bootstrap trap where λ rises before budget-conditional
-behavior can develop, collapsing expensive-but-accurate models globally.
+Both λ and β can be fixed (blackbox experiments) or adaptive (Lagrangian).
+When adaptive, λ auto-adjusts via dual update:
+    λ = max(0, λ + lr_λ * (mean_cost - 1))
 
-Planner training (REINFORCE + Lagrangian):
+Planner training (REINFORCE):
     quality_reward = 1.0 if solved else 0.0
-    cost = workflow_latency / budget_total
-    utility = quality_reward - λ * cost
+    time_cost = workflow_latency / budget_total
+    dollar_cost = workflow_cost_delta
+    utility = quality - λ * time_cost - β * dollar_cost
     advantage = (utility - mean) / std
     loss = -log_prob * advantage + task_loss + vae_loss * 0.001
 
-Executor training (PPO + Lagrangian):
+Executor training (PPO):
     quality_reward = 1.0 if solved else 0.0  (episode-level)
-    cost = step_latency / budget_total       (step-level contribution)
-    reward = quality_reward - λ * cost
+    time_cost = step_latency / budget_total  (step-level)
+    dollar_cost = step cost_delta            (step-level)
+    reward = quality - λ * time_cost - β * dollar_cost
     PPO clipped surrogate with K epochs
-    Dual update: λ = max(0, λ + lr_λ * (mean_cost - 1))
-        Only active after warmup_epochs.
 """
 
 from typing import Dict, Iterable, List, Optional
@@ -60,6 +57,10 @@ class InfraMindTrainer:
         lambda_max: float = 1.0,
         # λ warmup: hold λ=0 for first N epochs so policy learns quality first
         warmup_epochs: int = 3,
+        # Dollar cost penalty (β * dollar_cost in reward)
+        beta_cost: float = 0.0,
+        # Fixed lambda mode: when True, λ is fixed (no dual update)
+        fixed_lambda: bool = False,
     ) -> None:
         self.router = router
         self.executor_entropy_coef = executor_entropy_coef
@@ -74,6 +75,12 @@ class InfraMindTrainer:
         self.lambda_lag = lambda_init
         self.lr_lambda = lr_lambda
         self.lambda_max = lambda_max
+
+        # Dollar cost penalty
+        self.beta_cost = beta_cost
+
+        # Fixed lambda mode: skip dual update, use lambda_init as-is
+        self.fixed_lambda = fixed_lambda
 
         # λ warmup: policy learns quality maximization before cost pressure
         self.warmup_epochs = warmup_epochs
@@ -183,12 +190,13 @@ class InfraMindTrainer:
             is_solved = float(item.get("is_solved", 0))
             latency = float(item["workflow_latency_seconds"])
             budget = float(item["budget_total"])
+            dollar_cost = float(item.get("workflow_cost_delta", 0.0))
 
-            # Lagrangian utility: quality - λ * cost
+            # Reward: quality - λ * time_cost - β * dollar_cost
             quality_reward = 1.0 if is_solved > 0.5 else 0.0
-            cost = latency / max(budget, 1e-3)
+            time_cost = latency / max(budget, 1e-3)
             effective_lambda = 0.0 if self.warmup_active else self.lambda_lag
-            utility = quality_reward - effective_lambda * cost
+            utility = quality_reward - effective_lambda * time_cost - self.beta_cost * dollar_cost
 
             utilities.append(utility)
             log_probs.append(log_prob.squeeze())
@@ -268,16 +276,19 @@ class InfraMindTrainer:
         budget_total = torch.tensor(
             [float(item.get("budget_total", 60.0)) for item in batch], device=device,
         )
+        step_dollar_costs = torch.tensor(
+            [float(item.get("cost_delta", 0.0)) for item in batch], device=device,
+        )
 
         # Quality reward: binary episode outcome
         quality_reward = is_solved
 
-        # Cost: simple ratio, no urgency multiplier
-        cost = step_latencies / budget_total.clamp(min=1.0)
+        # Time cost: latency ratio
+        time_cost = step_latencies / budget_total.clamp(min=1.0)
 
-        # Lagrangian reward: quality - λ * cost (λ=0 during warmup)
+        # Reward: quality - λ * time_cost - β * dollar_cost
         effective_lambda = 0.0 if self.warmup_active else self.lambda_lag
-        rewards = (quality_reward - effective_lambda * cost).detach()
+        rewards = (quality_reward - effective_lambda * time_cost - self.beta_cost * step_dollar_costs).detach()
 
         # PPO: K epochs on the same batch
         for ppo_epoch in range(self.ppo_epochs):
@@ -312,13 +323,13 @@ class InfraMindTrainer:
             self.executor_optimizer.step()
 
         # Dual update: adjust λ based on episode-level constraint violation
-        # Skipped during warmup — λ stays at 0 so policy learns quality first
+        # Skipped during warmup or when using fixed lambda
         episode_costs = torch.tensor(
             [float(item.get("workflow_latency_seconds", 0.0)) / max(float(item.get("budget_total", 60.0)), 1.0)
              for item in batch], device=device,
         )
         mean_episode_cost = episode_costs.mean().item()
-        if not self.warmup_active:
+        if not self.warmup_active and not self.fixed_lambda:
             self.lambda_lag = min(
                 self.lambda_max,
                 max(0.0, self.lambda_lag + self.lr_lambda * (mean_episode_cost - 1.0)),

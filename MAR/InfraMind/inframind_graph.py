@@ -224,7 +224,9 @@ class InfraMindGraph(Graph):
                             success = True
                             break
                         except Exception as e:
+                            import traceback as _tb
                             error_msg = str(e)
+                            logger.warning("Agent {} attempt {}/{} error: {}\n{}", node_id, tries, max_tries, error_msg, _tb.format_exc())
                 finally:
                     usage = usage_tracker.consume(usage_key)
                     usage_tracker.reset_context(context_token)
@@ -238,6 +240,7 @@ class InfraMindGraph(Graph):
                 observed_tpot = float(getattr(node, "last_tpot", 0.0))
 
                 transition["latency_seconds"] = duration_sec
+                transition["cost_delta"] = float(usage.get("cost", 0.0))
                 transition["response"] = response_text
                 transition["prompt_base"] = prompt_base
                 transition["token_counts"] = token_counts

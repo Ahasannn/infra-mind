@@ -1,0 +1,69 @@
+{
+  "pool_type": "blackbox",
+  "global_settings": {
+    "default_max_model_len": 16384,
+    "default_max_output_tokens": 2048
+  },
+  "models": [
+    {
+      "Name": "gemini-2.5-flash-lite",
+      "Description": "The 'Speed Runner'. Fastest and cheapest Gemini model. Budget-friendly for quick tasks. [MATH ~65%, speed: very fast]",
+      "MaxModelLen": 16384,
+      "MaxOutputTokens": 2048,
+      "provider": "gemini",
+      "rpm_limit": 10,
+      "api_env_key": "GEMINI_API_KEY",
+      "base_url_env": "GEMINI_BASE_URL",
+      "base_url_default": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "pricing": {"input": 0.10, "output": 0.40}
+    },
+    {
+      "Name": "gemini-2.5-flash",
+      "Description": "The 'Reasoning Flash'. Gemini's thinking model — strong reasoning at flash-tier pricing. Excels at complex math with thinking mode. [MATH ~85%, speed: moderate]",
+      "MaxModelLen": 16384,
+      "MaxOutputTokens": 2048,
+      "provider": "gemini",
+      "rpm_limit": 10,
+      "api_env_key": "GEMINI_API_KEY",
+      "base_url_env": "GEMINI_BASE_URL",
+      "base_url_default": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "pricing": {"input": 0.15, "output": 0.60}
+    },
+    {
+      "Name": "openai/gpt-4o-mini",
+      "Description": "The 'Reliable Generalist'. GPT-4o Mini via OpenRouter. Fast, cheap, solid baseline for math and reasoning. [MATH ~70%, speed: fast]",
+      "MaxModelLen": 16384,
+      "MaxOutputTokens": 2048,
+      "provider": "openrouter",
+      "rpm_limit": 10,
+      "api_env_key": "OPENROUTER_API_KEY",
+      "base_url_env": "OPENROUTER_BASE_URL",
+      "base_url_default": "https://openrouter.ai/api/v1",
+      "pricing": {"input": 0.15, "output": 0.60}
+    },
+    {
+      "Name": "x-ai/grok-4.1-fast",
+      "Description": "The 'Agile Reasoner'. xAI's fast agentic model via OpenRouter. Strong tool-use and reasoning at budget pricing. [MATH ~75%, speed: fast]",
+      "MaxModelLen": 16384,
+      "MaxOutputTokens": 2048,
+      "provider": "openrouter",
+      "rpm_limit": 10,
+      "api_env_key": "OPENROUTER_API_KEY",
+      "base_url_env": "OPENROUTER_BASE_URL",
+      "base_url_default": "https://openrouter.ai/api/v1",
+      "pricing": {"input": 0.20, "output": 0.50}
+    },
+    {
+      "Name": "deepseek/deepseek-v3.2",
+      "Description": "The 'Math Specialist'. DeepSeek V3.2 via OpenRouter. IMO gold-level math reasoning at bargain pricing. [MATH ~90%, speed: moderate]",
+      "MaxModelLen": 16384,
+      "MaxOutputTokens": 2048,
+      "provider": "openrouter",
+      "rpm_limit": 10,
+      "api_env_key": "OPENROUTER_API_KEY",
+      "base_url_env": "OPENROUTER_BASE_URL",
+      "base_url_default": "https://openrouter.ai/api/v1",
+      "pricing": {"input": 0.25, "output": 0.40}
+    }
+  ]
+}

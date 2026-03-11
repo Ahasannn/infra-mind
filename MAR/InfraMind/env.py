@@ -217,6 +217,11 @@ class InfraMindEnv:
         else:
             quality, quality_meta = self._score_quality(final_response, tests)
 
+        # Aggregate dollar cost across all steps
+        workflow_cost_delta = sum(
+            float(t.get("cost_delta", 0.0)) for t in executor_transitions
+        )
+
         for transition in executor_transitions:
             transition["quality"] = float(quality.detach().cpu().item())
             transition["workflow_latency_seconds"] = workflow_latency
@@ -235,9 +240,10 @@ class InfraMindEnv:
             "quality": float(quality.detach().cpu().item()),
             "is_solved": quality_meta.get("is_solved"),
             "workflow_latency_seconds": workflow_latency,
+            "workflow_cost_delta": workflow_cost_delta,
         }
 
-        return {
+        result = {
             "response": final_response,
             "workflow_latency_seconds": workflow_latency,
             "llm_elapsed_seconds": llm_elapsed_seconds,
@@ -255,6 +261,8 @@ class InfraMindEnv:
             "planner_transition": planner_transition,
             "executor_transitions": executor_transitions,
         }
+
+        return result
 
     def _score_quality(self, response: str, tests: List[str]) -> Tuple[torch.Tensor, Dict[str, Union[bool, str]]]:
         code = self._extract_code(response)
