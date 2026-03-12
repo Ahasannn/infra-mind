@@ -1,0 +1,66 @@
+% ─── Compact paper table ───
+\begin{table*}[t]
+\centering
+\caption{Accuracy (\%) and mean latency (s) under low and high load. Baseline accuracy is load-independent (mean across rates); only latency degrades. \textbf{Bold} = best in column. \sys{} trades a small accuracy margin for dramatically lower latency that remains stable under load.}
+\label{tab:main_results}
+\small
+\begin{tabular}{l cc cc cc cc cc}
+\toprule
+& \multicolumn{2}{c}{\textbf{MATH}} & \multicolumn{2}{c}{\textbf{MBPP}} & \multicolumn{2}{c}{\textbf{GSM-Hard}} & \multicolumn{2}{c}{\textbf{HumanEval}} & \multicolumn{2}{c}{\textbf{MMLU-Pro}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7} \cmidrule(lr){8-9} \cmidrule(lr){10-11}
+\textbf{Method} & Acc & Lat & Acc & Lat & Acc & Lat & Acc & Lat & Acc & Lat \\
+\midrule
+\multicolumn{11}{c}{\cellcolor{green!5}\textit{Low Load (10 req/min)}} \\
+\midrule
+\textsc{InfraMind} (Ours) & 70.8 & \textbf{27} & 78.3 & \textbf{43} & \textbf{59.1} & \textbf{26} & \textbf{98.5} & \textbf{18} & 53.5 & \textbf{30} \\
+MASRouter & 70.0 & 50 & \textbf{81.7} & 253 & 55.5 & 38 & 91.8 & 70 & \textbf{57.7} & 83 \\
+GPTSwarm & 70.7 & 84 & 77.3 & 73 & 54.4 & 52 & 88.1 & 55 & 56.9 & 36 \\
+MoA & \textbf{74.6} & 122 & 76.1 & 68 & 49.0 & 38 & 88.4 & 305 & 44.0 & 124 \\
+\midrule
+\multicolumn{11}{c}{\cellcolor{red!5}\textit{High Load (200 req/min)}} \\
+\midrule
+\textsc{InfraMind} (Ours) & 66.2 & \textbf{192} & 73.2 & \textbf{173} & 51.1 & \textbf{93} & \textbf{98.2} & \textbf{36} & 51.2 & \textbf{185} \\
+MASRouter & 70.0 & 430 & \textbf{81.7} & 1164 & \textbf{55.5} & 680 & 91.8 & 205 & \textbf{57.7} & 949 \\
+GPTSwarm & 70.7 & 1263 & 77.3 & 1333 & 54.4 & 877 & 88.1 & 400 & 56.9 & 844 \\
+MoA & \textbf{74.6} & 1162 & 76.1 & 1002 & 49.0 & 561 & 88.4 & 877 & 44.0 & 1221 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+% ─── Full wide table (supplementary) ───
+\begin{table*}[t]
+\centering
+\caption{Main results across five benchmarks under varying load. Accuracy (\%), Mean Latency (s), and SLO Compliance at 100s budget (\%). Baseline accuracy is averaged across all arrival rates (routing decisions are load-independent). Best values per metric are \textbf{bolded}.}
+\label{tab:main_results}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{l|ccc|ccc|ccc|ccc}
+\toprule
+& \multicolumn{3}{c|}{\textbf{INFRAMIND (Ours)}} & \multicolumn{3}{c|}{\textbf{MASRouter}} & \multicolumn{3}{c|}{\textbf{MoA}} & \multicolumn{3}{c}{\textbf{GPTSwarm}} \\
+\textbf{Dataset} & Acc & Lat & SLO & Acc & Lat & SLO & Acc & Lat & SLO & Acc & Lat & SLO \\
+\midrule
+\multicolumn{13}{c}{\textit{Low (10) req/min}} \\
+\midrule
+MATH & 70.8 & \textbf{27.2} & \textbf{98.7} & 70.0 & 49.6 & 89.6 & \textbf{74.6} & 122.0 & 34.4 & 70.7 & 84.1 & 67.8 \\
+MBPP & 78.3 & \textbf{43.2} & \textbf{90.2} & \textbf{81.7} & 253.2 & 32.6 & 76.1 & 67.8 & 86.0 & 77.3 & 72.7 & 79.2 \\
+GSM-Hard & \textbf{59.1} & \textbf{25.6} & \textbf{99.2} & 55.5 & 37.7 & 98.0 & 49.0 & 38.2 & \textbf{99.2} & 54.4 & 52.1 & 95.0 \\
+HumanEval & \textbf{98.5} & \textbf{18.1} & \textbf{99.2} & 91.8 & 69.6 & 74.8 & 88.4 & 305.1 & 11.4 & 88.1 & 55.4 & \textbf{99.2} \\
+MMLU-Pro & 53.5 & \textbf{30.2} & 96.4 & \textbf{57.7} & 82.6 & 72.0 & 44.0 & 123.9 & 64.0 & 56.9 & 35.6 & \textbf{99.8} \\
+\midrule
+\multicolumn{13}{c}{\textit{Mid (100) req/min}} \\
+\midrule
+MATH & 66.3 & \textbf{142.9} & \textbf{59.0} & 70.0 & 398.7 & 22.0 & \textbf{74.6} & 1159.7 & 0.0 & 70.7 & 1325.1 & 0.2 \\
+MBPP & 73.4 & \textbf{103.3} & \textbf{67.5} & \textbf{81.7} & 984.8 & 22.3 & 76.1 & 992.8 & 0.2 & 77.3 & 1369.4 & 0.2 \\
+GSM-Hard & 51.8 & \textbf{98.2} & \textbf{63.4} & \textbf{55.5} & 652.3 & 8.6 & 49.0 & 524.5 & 4.0 & 54.4 & 806.2 & 2.2 \\
+HumanEval & \textbf{97.7} & \textbf{32.7} & \textbf{96.8} & 91.8 & 205.1 & 28.2 & 88.4 & 952.3 & 0.0 & 88.1 & 351.6 & 3.0 \\
+MMLU-Pro & 52.1 & \textbf{217.7} & \textbf{53.4} & \textbf{57.7} & 907.8 & 7.5 & 44.0 & 1170.9 & 0.0 & 56.9 & 753.3 & 5.2 \\
+\midrule
+\multicolumn{13}{c}{\textit{High (200) req/min}} \\
+\midrule
+MATH & 66.2 & \textbf{191.8} & \textbf{44.8} & 70.0 & 429.8 & 9.0 & \textbf{74.6} & 1162.1 & 0.0 & 70.7 & 1263.3 & 0.0 \\
+MBPP & 73.2 & \textbf{172.9} & \textbf{55.6} & \textbf{81.7} & 1164.4 & 17.3 & 76.1 & 1002.1 & 0.0 & 77.3 & 1333.5 & 0.0 \\
+GSM-Hard & 51.1 & \textbf{92.6} & \textbf{66.0} & \textbf{55.5} & 680.0 & 8.6 & 49.0 & 560.5 & 2.6 & 54.4 & 877.1 & 0.6 \\
+HumanEval & \textbf{98.2} & \textbf{35.6} & \textbf{95.1} & 91.8 & 205.4 & 32.1 & 88.4 & 877.1 & 0.0 & 88.1 & 399.9 & 0.0 \\
+MMLU-Pro & 51.2 & \textbf{184.8} & \textbf{59.5} & \textbf{57.7} & 949.1 & 6.0 & 44.0 & 1221.3 & 0.0 & 56.9 & 844.2 & 2.4 \\
+\bottomrule
+\end{tabular}}
+\end{table*}
