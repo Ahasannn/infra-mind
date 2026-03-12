@@ -1,21 +1,8 @@
-context/
-docx/
-logs/
-Datasets/MATH/*
-Datasets/MMLU/*
-register/
-
+# Environment and secrets
 .env
 .venv/
 .python-version.local
-*.jsonl
-*.pth
-*.pyc
-*.csv
-*.pptx
-*.zip
 settings.json
-*.claudecore.*
 
 # Python build artifacts
 *.egg-info/
@@ -24,11 +11,42 @@ __pycache__/
 *$py.class
 build/
 dist/
-.claude/.nfs00000002339d2c3300000139
-temp_markdowns/
-cache/
+
+# Data files (large / generated)
+*.jsonl
+*.pth
+*.pt
+*.csv
 *.db
+
+# Documents and archives
+*.pptx
+*.zip
+
+# Logs and checkpoints
+logs/
+checkpoints/
 function_logs.log
 output.txt
-scripts/temp/
+
+# Datasets (large, downloaded separately)
+Datasets/MATH/*
+Datasets/MMLU/*
+
+# Project-specific ignores
+context/
+docx/
+register/
 paper/
+temp_markdowns/
+cache/
+scripts/temp/
+visualization/temp/
+
+# Claude Code artifacts
+*.claudecore.*
+.claude/.nfs*
+
+# OS files
+.DS_Store
+Thumbs.db

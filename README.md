@@ -1,264 +1,214 @@
 # INFRAMIND: Infrastructure-Aware Multi-Agent Orchestration
 
-**INFRAMIND** is a system-aware routing framework for multi-agent systems (MAS) that dynamically orchestrates LLM collaboration based on real-time infrastructure metrics and resource constraints.
+**INFRAMIND** is a research framework for dynamically orchestrating LLM collaboration in multi-agent systems based on real-time infrastructure metrics and resource constraints.
 
-## 🎯 Overview
+Unlike traditional routing approaches that only consider task characteristics, INFRAMIND monitors vLLM infrastructure state (queue depth, KV cache usage, latency) and uses a hierarchical Constrained Markov Decision Process (CMDP) to adaptively balance accuracy, latency, and cost under dynamic system loads.
 
-Traditional LLM routing approaches focus solely on task characteristics, ignoring the underlying infrastructure state. **INFRAMIND** introduces infrastructure-awareness into multi-agent orchestration, using a hierarchical Constrained Markov Decision Process (CMDP) to balance accuracy, latency, and cost under dynamic system loads.
+## Overview
 
 ### Key Contributions
 
 - **System-Aware Routing**: Real-time monitoring of vLLM metrics (queue depth, KV cache usage, latency) to inform routing decisions
-- **Hierarchical CMDP Architecture**: Two-level decision making with Planner (topology + role selection) and Executor (LLM + strategy routing)
-- **Load-Adaptive Orchestration**: Dynamic adjustment of agent collaboration patterns based on infrastructure state
-- **Comprehensive Evaluation**: Tested across 5 datasets (MATH, MBPP, GSM8K, HumanEval, MMLU) under various load conditions
+- **Hierarchical CMDP Architecture**: Two-level decision making — Planner (topology + role selection) and Executor (LLM + strategy routing)
+- **PPO-Lagrangian Training**: Shared Lagrange multiplier automatically balances quality vs cost without hand-tuned reward coefficients
+- **Hybrid Model Pool**: Support for both whitebox (self-hosted vLLM) and blackbox (API-based) models with unified profiling
+- **Comprehensive Evaluation**: Tested across 5 datasets (MATH, MBPP, GSM-Hard, HumanEval, MMLU-Pro) under various load conditions
+- **Multiple Baselines**: Comparison against MasRouter, GPTSwarm, and MoA
 
-## 🏗️ Architecture
+## Architecture
 
-INFRAMIND consists of two main components:
+INFRAMIND uses a two-level decision process:
 
-1. **InfraMind** (`MAR/InfraMind/`): Hierarchical CMDP-based routing with infrastructure monitoring
-2. **Multi-Agent Graph Framework** (`MAR/Graph/`): Flexible execution engine for collaborative LLM reasoning
+**Planner** (quality-driven, t=0):
+- Selects collaboration topology (single-agent CoT, debate, hierarchical review)
+- Assigns agent roles from query embedding
+- Optimizes purely for quality — no budget awareness
 
-### InfraMind
+**Executor** (infrastructure-aware, runtime):
+- Selects (LLM, strategy) jointly per role from a 5×3=15 action space (5 models × 3 strategies)
+- Input: query embedding + role embedding + remaining budget + system metrics
+- Adapts to infrastructure state: smaller/faster models under high load, larger models when resources available
 
-- **Planner**: Selects collaboration topology and role set at query arrival (t=0)
-- **Executor**: Dynamically routes (LLM, strategy) per role during execution based on:
-  - Query embeddings
-  - Role embeddings
-  - Remaining budget
-  - System metrics (queue depth, cache usage, latency predictions)
+**Prompt Strategies**:
+- **Flash**: Minimal reasoning (fastest, cheapest)
+- **Concise**: Balanced reasoning
+- **DeepThink**: Detailed step-by-step reasoning (slowest, most accurate)
 
 ### Infrastructure Monitoring
 
-Real-time metrics collection from vLLM endpoints:
-- Queue depth (running + waiting requests)
-- KV cache usage
+Real-time metrics collection from vLLM `/metrics` endpoints:
+- Queue depth (running + waiting requests per model)
+- KV cache usage (GPU memory utilization)
 - Time-to-first-token (TTFT)
 - Inter-token latency (ITL)
 - End-to-end latency
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Environment Setup
 
 ```bash
-# Create virtual environment (Python 3.11 recommended)
+# Create virtual environment (Python 3.11)
 uv venv --python 3.11
 source .venv/bin/activate
 uv sync --frozen
 
-# Optional: For local vLLM serving
+# For local vLLM serving
 uv sync --frozen --extra serve
 ```
 
 ### Configuration
 
-1. **API Keys**: Copy `template.env` to `.env` and add your API keys
-   ```bash
-   URL=""  # LLM backend URL
-   KEY=""  # API key
-   ```
+Copy `template.env` to `.env` and configure:
 
-2. **Orange Storage** (HPC): Configure paths in `scripts/setup_hpc_env.sh`
-   ```bash
-   export ORANGE_STORAGE="/orange/qi855292.ucf/ah872032.ucf"
-   export HF_HOME="${ORANGE_STORAGE}/huggingface_cache"
-   ```
-
-### Datasets
-
-Download and organize datasets in the `Datasets/` directory:
-
-```
-Datasets/
-├── MATH/
-│   ├── test/
-│   └── train/
-├── MBPP/
-├── gsm8k/
-├── humaneval/
-└── MMLU/data/
+```bash
+cp template.env .env
 ```
 
-Most datasets auto-download from HuggingFace on first use.
+Required keys:
+- `URL` / `KEY`: vLLM backend URL and API key
+- `GEMINI_API_KEY`: For blackbox experiments with Gemini models
+- `OPENROUTER_API_KEY`: For blackbox experiments via OpenRouter
 
 ### Local vLLM Model Pool
 
-Start a local pool of 5 vLLM servers on different ports:
-
 ```bash
-# Start all models (ports 8001-8005)
-bash scripts/vllm/serve_full_pool.sh
-
-# Check health status
-bash scripts/check_vllm_status.sh
-
-# Stop all models
-bash scripts/vllm/stop_pool.sh
+bash scripts/vllm/serve_full_pool.sh    # Start all models (ports 8001-8005)
+bash scripts/check_vllm_status.sh       # Check health
+bash scripts/vllm/stop_pool.sh          # Stop all
 ```
 
-Model pool includes:
-- Qwen2.5-Coder-7B-Instruct (port 8001)
-- Qwen2.5-32B-Instruct (port 8002)
-- Qwen2.5-3B-Instruct (port 8003)
-- Qwen2.5-0.5B-Instruct (port 8004)
-- Qwen2.5-1.5B-Instruct (port 8005)
+## Running Experiments
 
-## 🧪 Running Experiments
-
-### InfraMind Training
-
-Train the infrastructure-aware router on each dataset:
+### INFRAMIND Training (Whitebox)
 
 ```bash
-# MBPP dataset
 python Experiments/train_inframind_mbpp.py
-
-# GSM8K dataset
-python Experiments/train_inframind_gsm8k.py --dataset-path Datasets/gsm8k/gsm8k.jsonl
-
-# MATH dataset
-python Experiments/train_inframind_math.py --dataset-root Datasets/MATH
-
-# MMLU dataset
-python Experiments/train_inframind_mmlu.py --dataset-root Datasets/MMLU/data
-
-# HumanEval dataset
+python Experiments/train_inframind_gsm_hard.py
 python Experiments/train_inframind_humaneval.py --dataset-path Datasets/humaneval/humaneval-py.jsonl
+python Experiments/train_inframind_math.py --dataset-root Datasets/MATH
+python Experiments/train_inframind_mmlu_pro.py
 ```
 
-### Baseline MAS Router Training (Comparison)
-
-For comparison, train the baseline MAS Router without infrastructure awareness:
+### INFRAMIND Training (Blackbox API Models)
 
 ```bash
-# Using SLURM (recommended for HPC)
-sbatch scripts/baseline_train/submit_mas_train_mbpp.slurm
-sbatch scripts/baseline_train/submit_mas_train_gsm8k.slurm
+python Experiments/train_inframind_blackbox_math.py
+```
+
+### Baseline: MasRouter
+
+```bash
+python Experiments/run_mbpp.py
+python Experiments/run_gsm_hard.py
+python Experiments/run_humaneval.py
+python Experiments/run_math.py
+python Experiments/run_mmlu_pro.py
+```
+
+### Baseline: GPTSwarm
+
+```bash
+python Experiments/train_gptswarm_math.py        # Training
+python Experiments/run_gptswarm_math.py           # Testing
+```
+
+### Baseline: MoA (Zero-Training Ensemble)
+
+```bash
+python Experiments/run_moa_math.py
+```
+
+### Blackbox Baseline (MasRouter on API Models)
+
+```bash
+python Experiments/run_blackbox_math.py
+```
+
+### SLURM (HPC)
+
+```bash
+# Baseline training
 sbatch scripts/baseline_train/math/train_mas_math.slurm
-sbatch scripts/baseline_train/submit_mas_train_humaneval.slurm
-sbatch scripts/baseline_train/submit_mas_train_mmlu.slurm
 
-# Or run directly
-python Experiments/run_mbpp.py --epochs 2 --batch_size 32 --lr 0.01
+# INFRAMIND training
+sbatch scripts/inframind_training/math/train_inframind.slurm
+
+# Blackbox experiments
+sbatch scripts/blackbox/math/1_train_mas.slurm
+sbatch scripts/blackbox/math/3_train_inframind.slurm
+
+# Test sweeps (arrival rate × cost rate)
+sbatch scripts/test/math/submit_baseline_test_math.slurm
+sbatch scripts/test/math/submit_inframind_test_math.slurm
 ```
 
-### Arrival Rate Sweeps (Load Testing)
+## Datasets
 
-Test routers under various arrival rates (requests per minute):
+| Dataset  | Train | Val | Test | Source |
+|----------|-------|-----|------|--------|
+| MATH     | 519   | 131 | 500  | Local (`Datasets/MATH/`) |
+| MBPP     | 374   | 94  | 500  | HuggingFace (auto-download) |
+| GSM-Hard | 500   | 125 | 500  | HuggingFace `reasoning-machines/gsm-hard` |
+| HumanEval| 33    | 10  | 131  | Local JSONL |
+| MMLU-Pro | 500   | 70  | 500  | HuggingFace `TIGER-Lab/MMLU-Pro` |
 
-```bash
-# InfraMind
-sbatch scripts/motivation_plot_generator_data/submit_baseline_mas_test_arrival_sweep_mbpp.slurm
-
-# Sweeps test at: 2, 5, 100, 200, 300 req/min with Poisson arrival pattern
-```
-
-Results are saved to `logs/motivation_plot_generator_data/`.
-
-### Generating Plots
-
-```bash
-# Generate motivation plots from sweep results
-python visualization/generate_motivation_plots.py
-
-# Or use Jupyter notebook
-jupyter notebook visualization/motivation_plots.ipynb
-```
-
-## 📊 Project Structure
+## Project Structure
 
 ```
 .
-├── MAR/                            # Core framework
-│   ├── InfraMind/                 # Infrastructure-aware routing (INFRAMIND)
-│   │   ├── inframind_router.py   # Hierarchical CMDP implementation
-│   │   ├── metrics_watcher.py    # Real-time vLLM metrics collection
-│   │   └── training.py           # CMDP training loop
-│   ├── MasRouter/                # Baseline MAS Router
-│   ├── Graph/                    # Multi-agent execution framework
-│   ├── Agent/                    # Base agent implementation
-│   ├── LLM/                      # LLM interface layer
-│   ├── Roles/                    # Domain-specific agent roles
-│   └── Prompts/                  # Prompt templates
+├── MAR/                              # Core framework
+│   ├── InfraMind/                    # INFRAMIND router (main contribution)
+│   │   ├── inframind_router.py       #   Hierarchical CMDP (planner + executor)
+│   │   ├── metrics_watcher.py        #   Real-time vLLM metrics collection
+│   │   ├── blackbox_metrics.py       #   RPM-based metrics for API models
+│   │   ├── trainer.py                #   PPO-Lagrangian training
+│   │   └── training.py               #   Training loop orchestration
+│   ├── MasRouter/                    # Baseline MAS Router (VAE-based)
+│   ├── GPTSwarm/                     # GPTSwarm baseline (REINFORCE edges)
+│   ├── MoA/                          # MoA baseline (brute-force ensemble)
+│   ├── Graph/                        # Multi-agent execution framework
+│   ├── Agent/                        # Base agent implementation
+│   ├── LLM/                          # LLM interface layer
+│   │   ├── model_pool.py             #   Unified whitebox/blackbox model pool
+│   │   ├── blackbox_setup.py         #   API key management for blackbox models
+│   │   ├── llm_profile_full.json     #   Whitebox model profiles (vLLM)
+│   │   └── llm_profile_blackbox.json #   Blackbox model profiles (API)
+│   ├── Roles/                        # Domain-specific agent roles
+│   └── Prompts/                      # Prompt templates
 │
-├── Experiments/                   # Training and evaluation scripts
-│   ├── train_inframind_*.py  # System-aware router training
-│   └── run_*.py                  # Baseline MAS Router training
+├── Experiments/                      # Training and evaluation scripts
+│   ├── train_inframind_*.py          #   INFRAMIND training (whitebox + blackbox)
+│   ├── run_*.py                      #   MasRouter baseline
+│   ├── train_gptswarm_*.py           #   GPTSwarm training
+│   ├── run_gptswarm_*.py             #   GPTSwarm testing
+│   └── run_moa_*.py                  #   MoA testing
 │
-├── Datasets/                      # Dataset loaders
+├── Datasets/                         # Dataset loaders
 │   ├── math_dataset.py
 │   ├── mbpp_dataset.py
-│   ├── gsm8k_dataset.py
+│   ├── gsm_hard_dataset.py
 │   ├── humaneval_dataset.py
-│   └── mmlu_dataset.py
+│   └── mmlu_pro_dataset.py
 │
-├── scripts/                       # Utility scripts
-│   ├── baseline_train/           # SLURM training jobs
-│   ├── motivation_plot_generator_data/  # Load testing scripts
-│   ├── vllm/                     # vLLM server management
-│   └── setup_hpc_env.sh          # HPC environment setup
+├── results/                          # Experiment results and plots
+│   ├── aggregate_results.py
+│   ├── plots/                        #   Generated figures (PDF/PNG/SVG)
+│   └── tables.md                     #   Result tables
 │
-└── visualization/                 # Plotting and analysis
-    ├── generate_motivation_plots.py
-    └── motivation_plots.ipynb
+├── scripts/                          # SLURM and utility scripts
+│   ├── baseline_train/{dataset}/     #   MasRouter SLURM training
+│   ├── inframind_training/{dataset}/ #   INFRAMIND SLURM training
+│   ├── blackbox/{dataset}/           #   Blackbox experiment scripts
+│   ├── test/{dataset}/               #   Test sweep scripts
+│   └── vllm/                         #   vLLM server management
+│
+└── visualization/                    # Plotting utilities
 ```
 
-## 📈 Key Features
+## Acknowledgments
 
-### 1. Infrastructure Monitoring
-
-Real-time collection of system metrics from vLLM endpoints:
-- Automatically polls `/metrics` endpoint
-- Tracks per-model queue depths and latencies
-- Maintains sliding window of historical metrics
-
-### 2. Constrained MDP Formulation
-
-**State Space**:
-- Query embedding (768-dim)
-- Role embedding (768-dim)
-- Remaining budget (scalar)
-- System metrics vector (queue depth, cache usage, latency predictions)
-
-**Action Space**:
-- LLM selection (5 models)
-- Prompting strategy (Flash, Concise, DeepThink)
-
-**Reward**:
-- Accuracy (task-specific correctness)
-- Cost penalty (token usage × model pricing)
-- Latency penalty (infrastructure-aware)
-
-### 3. Hierarchical Decision Making
-
-- **Planner** (t=0): Selects topology (single-agent CoT, debate, hierarchical) and roles
-- **Executor** (runtime): Dynamically assigns LLM+strategy per role based on current system state
-
-### 4. Load-Adaptive Behavior
-
-Under high load:
-- Prefers smaller, faster models
-- Uses concise prompting strategies
-- Reduces agent collaboration complexity
-
-Under low load:
-- Leverages larger models for accuracy
-- Uses deeper reasoning strategies
-- Enables richer multi-agent collaboration
-
-## 🎓 Academic Use
-
-This repository is designed for research and academic use. When using INFRAMIND in your research, please:
-
-1. Cite the original MAS Router baseline (see Acknowledgments)
-2. Reference our work (citation details will be added upon publication)
-3. Follow the Apache 2.0 license terms
-
-## 🙏 Acknowledgments
-
-This work builds upon the **MAS Router** framework as a baseline:
+This work builds upon the **MAS Router** framework:
 
 ```bibtex
 @misc{yue2025masrouter,
@@ -272,19 +222,10 @@ This work builds upon the **MAS Router** framework as a baseline:
 }
 ```
 
-We also thank the following projects for their contributions:
-- [MapCoder](https://github.com/Md-Ashraful-Pramanik/MapCoder) - Multi-agent code generation
-- [GPTSwarm](https://github.com/metauto-ai/GPTSwarm) - Agent orchestration patterns
-- [vLLM](https://github.com/vllm-project/vllm) - Efficient LLM serving
+Additional projects:
+- [GPTSwarm](https://github.com/metauto-ai/GPTSwarm) — Agent graph optimization (ICML 2024)
+- [vLLM](https://github.com/vllm-project/vllm) — Efficient LLM serving
 
-## 📝 Citation
+## License
 
-Citation information will be added upon publication.
-
-## 📄 License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
----
-
-**Note**: This is a research prototype. For production use, additional hardening and optimization may be required.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
