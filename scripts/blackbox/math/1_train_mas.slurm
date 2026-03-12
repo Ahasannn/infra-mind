@@ -59,7 +59,7 @@ CONCURRENCY="${CONCURRENCY:-1000}"
 # ===== Paths =====
 CHECKPOINT_DIR="checkpoints/mas_router_blackbox"
 mkdir -p "${CHECKPOINT_DIR}"
-CHECKPOINT_PATH="${CHECKPOINT_DIR}/mas_blackbox_math.pth"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-${CHECKPOINT_DIR}/mas_blackbox_math.pth}"
 
 LOG_DIR="logs/blackbox/mas/math"
 mkdir -p "${LOG_DIR}"

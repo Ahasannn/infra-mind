@@ -4,7 +4,7 @@
 #SBATCH --error=logs/blackbox/mas/math/test_slurm-%j.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-default
-#SBATCH --time=12:00:00
+#SBATCH --time=10:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
@@ -50,8 +50,8 @@ TEST_LIMIT="${TEST_LIMIT:-100}"
 CONCURRENCY="${CONCURRENCY:-1000}"
 ARRIVAL_PATTERN="poisson"
 
-# Arrival rates to sweep (match InfraMind: low=10, high=50)
-ARRIVAL_RATES="${ARRIVAL_RATES:-10 50}"
+# Arrival rates to sweep (low=10, mid=30, high=50)
+ARRIVAL_RATES="${ARRIVAL_RATES:-10 30 50}"
 
 # ===== Paths =====
 CHECKPOINT_DIR="checkpoints/mas_router_blackbox"

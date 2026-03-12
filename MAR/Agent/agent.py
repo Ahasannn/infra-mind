@@ -325,30 +325,53 @@ class Agent(Node):
                 extra_body=extra_body,
             )
 
-        try:
-            stream = _create_stream(messages, max_tokens)
-        except Exception as exc:
-            err = str(exc).lower()
-            if "max_tokens must be at least 1" in err or "context length" in err:
-                messages, max_tokens, _ = fit_messages_to_context(
-                    self.llm.model_name,
-                    messages,
-                    max_context_len,
-                    max_tokens,
-                    extra_margin=256,
-                )
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
                 stream = _create_stream(messages, max_tokens)
-            else:
+            except Exception as exc:
+                err = str(exc).lower()
+                if "max_tokens must be at least 1" in err or "context length" in err:
+                    messages, max_tokens, _ = fit_messages_to_context(
+                        self.llm.model_name,
+                        messages,
+                        max_context_len,
+                        max_tokens,
+                        extra_margin=256,
+                    )
+                    stream = _create_stream(messages, max_tokens)
+                else:
+                    if attempt < max_retries:
+                        logger.warning(
+                            "Stream create error on attempt %d/%d for %s: %s. Retrying...",
+                            attempt, max_retries, self.llm.model_name, exc,
+                        )
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+            try:
+                for chunk in stream:
+                    if not hasattr(chunk, "choices") or not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    text = getattr(delta, "content", "")
+                    if text:
+                        if first_token_time is None:
+                            first_token_time = time.perf_counter()
+                        parts.append(text)
+                break  # success
+            except Exception as exc:
+                if attempt < max_retries:
+                    logger.warning(
+                        "Stream read error on attempt %d/%d for %s: %s. Retrying...",
+                        attempt, max_retries, self.llm.model_name, exc,
+                    )
+                    parts.clear()
+                    first_token_time = None
+                    start = time.perf_counter()
+                    time.sleep(2 ** attempt)
+                    continue
                 raise
-        for chunk in stream:
-            if not hasattr(chunk, "choices") or not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            text = getattr(delta, "content", "")
-            if text:
-                if first_token_time is None:
-                    first_token_time = time.perf_counter()
-                parts.append(text)
         end = time.perf_counter()
         response = "".join(parts)
 
@@ -538,30 +561,53 @@ class FinalRefer(Node):
                 extra_body=extra_body,
             )
 
-        try:
-            stream = _create_stream(messages, max_tokens)
-        except Exception as exc:
-            err = str(exc).lower()
-            if "max_tokens must be at least 1" in err or "context length" in err:
-                messages, max_tokens, _ = fit_messages_to_context(
-                    self.llm.model_name,
-                    messages,
-                    max_context_len,
-                    max_tokens,
-                    extra_margin=256,
-                )
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
                 stream = _create_stream(messages, max_tokens)
-            else:
+            except Exception as exc:
+                err = str(exc).lower()
+                if "max_tokens must be at least 1" in err or "context length" in err:
+                    messages, max_tokens, _ = fit_messages_to_context(
+                        self.llm.model_name,
+                        messages,
+                        max_context_len,
+                        max_tokens,
+                        extra_margin=256,
+                    )
+                    stream = _create_stream(messages, max_tokens)
+                else:
+                    if attempt < max_retries:
+                        logger.warning(
+                            "Stream create error on attempt %d/%d for %s: %s. Retrying...",
+                            attempt, max_retries, self.llm.model_name, exc,
+                        )
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+            try:
+                for chunk in stream:
+                    if not hasattr(chunk, "choices") or not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    text = getattr(delta, "content", "")
+                    if text:
+                        if first_token_time is None:
+                            first_token_time = time.perf_counter()
+                        parts.append(text)
+                break  # success
+            except Exception as exc:
+                if attempt < max_retries:
+                    logger.warning(
+                        "Stream read error on attempt %d/%d for %s: %s. Retrying...",
+                        attempt, max_retries, self.llm.model_name, exc,
+                    )
+                    parts.clear()
+                    first_token_time = None
+                    start = time.perf_counter()
+                    time.sleep(2 ** attempt)
+                    continue
                 raise
-        for chunk in stream:
-            if not hasattr(chunk, "choices") or not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            text = getattr(delta, "content", "")
-            if text:
-                if first_token_time is None:
-                    first_token_time = time.perf_counter()
-                parts.append(text)
         end = time.perf_counter()
         response = "".join(parts)
 
