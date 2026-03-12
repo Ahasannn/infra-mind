@@ -15,6 +15,7 @@
 #   Tests InfraMind using checkpoint from Step 3.
 #   Sweeps over arrival rates × budget tiers.
 #   5 models × RPM=10 = 50 RPM total pool capacity.
+#   Fixed lambda=0.3 (latency) + beta=30 (dollar cost).
 #
 #   Requires:
 #     MAS checkpoint from Step 1 (for planner architecture)
@@ -50,17 +51,17 @@ export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
 LIMIT="${TEST_LIMIT:-100}"
 CONCURRENCY="${CONCURRENCY:-1000}"
 
-# Test sweep: arrival rates × budget tiers (2x2 matrix matching training)
-BUDGET_TIERS="${BUDGET_TIERS:-120,300}"
-ARRIVAL_RATES="${ARRIVAL_RATES:-10,50}"
+# Test sweep: arrival rates × budget tiers (matching training)
+BUDGET_TIERS="${BUDGET_TIERS:-200,500}"
+ARRIVAL_RATES="${ARRIVAL_RATES:-10,50,100}"
 
 # Fixed lambda/beta (must match training)
-LAMBDA_INIT="${LAMBDA_INIT:-0.5}"
-BETA_COST="${BETA_COST:-100}"
+LAMBDA_INIT="${LAMBDA_INIT:-0.3}"
+BETA_COST="${BETA_COST:-30}"
 
 # ===== Paths =====
 MAS_CHECKPOINT_DIR="checkpoints/mas_router_blackbox"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${MAS_CHECKPOINT_DIR}/mas_blackbox_math.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${MAS_CHECKPOINT_DIR}/mas_blackbox_math_cost15.pth}"
 
 INFRAMIND_CHECKPOINT_DIR="checkpoints/inframind_blackbox"
 # Find the best checkpoint (naming: inframind_math_{run_id}_best.pt)

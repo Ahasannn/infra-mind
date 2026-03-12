@@ -4,7 +4,7 @@
 #SBATCH --error=logs/blackbox/inframind/math/train_slurm-%j.err
 #SBATCH --account=qi855292.ucf
 #SBATCH --partition=hpg-default
-#SBATCH --time=18:00:00
+#SBATCH --time=10:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks=1
@@ -13,11 +13,12 @@
 # Step 3: Blackbox InfraMind Training — MATH
 #
 #   Trains InfraMind PPO-Lagrangian using blackbox API models.
-#   Uses MAS checkpoint from Step 1 as planner initialization.
-#   Fixed lambda=0.5 (latency), beta=100 (dollar cost).
+#   Uses MAS checkpoint (cost_rate=15) from Step 1 as planner initialization.
+#   Fixed lambda=0.3 (latency) + beta=30 (dollar cost).
+#   5 models × RPM=10 = 50 RPM total pool capacity.
 #
 #   Requires:
-#     MAS checkpoint from Step 1: checkpoints/mas_router_blackbox/mas_blackbox_math.pth
+#     MAS checkpoint from Step 1: checkpoints/mas_router_blackbox/mas_blackbox_math_cost15.pth
 #
 #   Produces checkpoint used by:
 #     - Step 4 (InfraMind test)
@@ -52,26 +53,27 @@ export MATH_DATASET_ROOT="${BLUE_STORAGE}/datasets/MATH"
 # ===== Configuration (override via env vars) =====
 LIMIT="${LIMIT:-100}"
 VAL_LIMIT="${VAL_LIMIT:-0}"
-EPOCHS="${EPOCHS:-10}"
+EPOCHS="${EPOCHS:-3}"
 CONCURRENCY="${CONCURRENCY:-1000}"
-TRAINING_BATCH_SIZE="${TRAINING_BATCH_SIZE:-32}"
-PATIENCE="${PATIENCE:-8}"
+TRAINING_BATCH_SIZE="${TRAINING_BATCH_SIZE:-16}"
+PATIENCE="${PATIENCE:-3}"
 
-# Budget tiers and arrival rates (2x2 matrix: {tight,loose} x {low,high})
-# 5 models × RPM=10 = 50 RPM total pool capacity
-# Low=10rpm (under capacity), High=50rpm (at capacity)
-BUDGET_TIERS="${BUDGET_TIERS:-120,300}"
-ARRIVAL_RATES="${ARRIVAL_RATES:-10,50}"
+# Budget tiers and arrival rates
+# MAS baseline latencies: rate=10→123s, rate=50→280s, rate=100→312s
+# Budget 200s = tight (forces cheaper models), 500s = loose (allows quality models)
+# 3 arrival rates matching MAS test sweep
+BUDGET_TIERS="${BUDGET_TIERS:-200,500}"
+ARRIVAL_RATES="${ARRIVAL_RATES:-10,50,100}"
 
-# PPO-Lagrangian
+# PPO-Lagrangian with fixed lambda
 PPO_EPOCHS="${PPO_EPOCHS:-3}"
 PPO_CLIP="${PPO_CLIP:-0.2}"
-LAMBDA_INIT="${LAMBDA_INIT:-0.5}"
-BETA_COST="${BETA_COST:-100}"
+LAMBDA_INIT="${LAMBDA_INIT:-0.3}"
+BETA_COST="${BETA_COST:-30}"
 
 # ===== Paths =====
 MAS_CHECKPOINT_DIR="checkpoints/mas_router_blackbox"
-MAS_CHECKPOINT="${MAS_CHECKPOINT:-${MAS_CHECKPOINT_DIR}/mas_blackbox_math.pth}"
+MAS_CHECKPOINT="${MAS_CHECKPOINT:-${MAS_CHECKPOINT_DIR}/mas_blackbox_math_cost15.pth}"
 
 CHECKPOINT_DIR="checkpoints/inframind_blackbox"
 mkdir -p "${CHECKPOINT_DIR}"
@@ -97,6 +99,7 @@ echo "Epochs:         ${EPOCHS}, Patience: ${PATIENCE}"
 echo "Budget tiers:   ${BUDGET_TIERS}"
 echo "Arrival rates:  ${ARRIVAL_RATES}"
 echo "Concurrency:    ${CONCURRENCY}"
+echo "Batch size:     ${TRAINING_BATCH_SIZE}"
 echo "PPO:            epochs=${PPO_EPOCHS} clip=${PPO_CLIP}"
 echo "Lambda:         ${LAMBDA_INIT} (fixed)"
 echo "Beta (dollar):  ${BETA_COST}"

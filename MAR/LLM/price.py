@@ -143,4 +143,25 @@ MODEL_PRICE = {
         "input": 0.02,
         "output": 0.02,
     },
+    # Blackbox API models (from llm_profile_blackbox.json)
+    "gemini-2.5-flash-lite": {
+        "input": 0.10,
+        "output": 0.40,
+    },
+    "gemini-2.5-flash": {
+        "input": 0.15,
+        "output": 0.60,
+    },
+    "openai/gpt-4o-mini": {
+        "input": 0.15,
+        "output": 0.60,
+    },
+    "x-ai/grok-4.1-fast": {
+        "input": 0.20,
+        "output": 0.50,
+    },
+    "deepseek/deepseek-v3.2": {
+        "input": 0.25,
+        "output": 0.40,
+    },
 }

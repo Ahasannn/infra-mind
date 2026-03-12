@@ -32,3 +32,5 @@ function_logs.log
 output.txt
 scripts/temp/
 paper/
+assets/results/
+results/
